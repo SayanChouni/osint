@@ -1,0 +1,13 @@
+{
+  "name": "osint-telegram-bot",
+  "version": "1.0.0",
+  "description": "OSINT Bot by Vishal on Vercel",
+  "main": "api/webhook.js",
+  "scripts": {
+    "start": "node api/webhook.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.0",
+    "axios": "^1.6.0"
+  }
+}
