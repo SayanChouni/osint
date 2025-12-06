@@ -6,13 +6,14 @@ const { MongoClient } = require('mongodb');
 // --- CONFIGURATION: Environment Variables ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531'; 
+// NOTE: MANDATORY_CHANNEL_ID now holds the MANDATORY GROUP ID
 
 // MongoDB Configuration 
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = "osint_user_db"; 
 const COLLECTION_NAME = "users";
 
-const FREE_TRIAL_LIMIT = 1; // <--- FIX: 1টি ফ্রি সার্চ
+const FREE_TRIAL_LIMIT = 1; // <--- FIXED: 1 FREE SEARCH
 const COST_PER_SEARCH = 2; 
 
 const ADMIN_USER_ID = parseInt(process.env.ADMIN_USER_ID); 
@@ -137,6 +138,7 @@ bot.use(async (ctx, next) => {
             const keyboard = Markup.inlineKeyboard([
                 [Markup.button.url("🔒 JOIN MANDATORY GROUP", GROUP_JOIN_LINK)]
             ]);
+            // CHANGED: Removed "CHANNEL" from message
             return ctx.reply('⛔️ **ACCESS REQUIRED!** ⛔️\n\n**YOU MUST BE A MEMBER OF THE GROUP TO USE COMMANDS. Use /start.**', keyboard);
         }
 
@@ -177,6 +179,7 @@ bot.use(async (ctx, next) => {
 
     return next();
 });
+
 
 // --- API HANDLER FUNCTION (General) ---
 
@@ -249,6 +252,7 @@ bot.start(async (ctx) => {
         ]);
 
         ctx.reply(
+            // CHANGED: Display 1 FREE SEARCH
             '👋 **WELCOME TO OSINT BOT!** 🥳\n\n**THIS BOT WORKS ONLY IN PRIVATE CHAT.**\n**YOU GET 1 FREE SEARCH! EACH SEARCH COSTS 2 TK AFTER TRIAL.**\n\n**YOU MUST JOIN THE GROUP BELOW TO USE COMMANDS:**',
             keyboard
         );
@@ -265,7 +269,7 @@ bot.command('balance', async (ctx) => {
 
 
 // --- NEW SUPPORT HANDLERS ---
-const supportResponse = '**✨ MESSAGE HERE ✨**\n\n**F E E L . F R E E . T O . D M**\n\n**👉 @zecboy**';
+const supportResponse = '**✨ MESSAGE HERE**\n\n**F E E L . F R E E . T O . D M**\n\n**👉 @zecboy**';
 
 bot.command(['donate', 'support', 'buyapi'], (ctx) => {
     ctx.reply(supportResponse, { parse_mode: 'Markdown' });
