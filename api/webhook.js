@@ -5,8 +5,6 @@ const { MongoClient } = require('mongodb');
 
 // --- CONFIGURATION: Environment Variables ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
-
-// COMMAND_GROUP_ID is REMOVED as the bot is now private chat focused.
 const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531'; 
 
 // MongoDB Configuration 
@@ -49,7 +47,6 @@ async function connectDB() {
         await client.connect();
         const db = client.db(DB_NAME);
         usersCollection = db.collection(COLLECTION_NAME);
-        // console.log("MongoDB Connected successfully");
     } catch (e) {
         console.error("MongoDB connection failed:", e);
         throw new Error("Database connection failed. Check MONGODB_URI.");
@@ -79,8 +76,13 @@ bot.use(async (ctx, next) => {
     
     const chat = ctx.chat;
     const user = ctx.from;
-    const isCommand = ctx.message && (ctx.message.text && (ctx.message.text.startsWith('/num') || ctx.message.text.startsWith('/adr') || ctx.message.text.startsWith('/v') || ctx.message.text.startsWith('/pin') || ctx.message.text.startsWith('/balance')));
+    const isCommand = ctx.message && (ctx.message.text && (ctx.message.text.startsWith('/num') || ctx.message.text.startsWith('/adr') || ctx.message.text.startsWith('/v') || ctx.message.text.startsWith('/pin') || ctx.message.text.startsWith('/balance') || ctx.message.text.startsWith('/start')));
 
+    // Skip all checks for /start command by going directly to the handler
+    if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/start')) {
+        return next();
+    }
+    
     // 1. ONLY process commands in private chat
     if (isCommand && chat.type !== 'private') {
          return ctx.reply('⚠️ **PLEASE USE THIS BOT IN PRIVATE CHAT.** ⚠️');
@@ -103,8 +105,9 @@ bot.use(async (ctx, next) => {
             const member = await ctx.telegram.getChatMember(MANDATORY_CHANNEL_ID, user.id);
             const isMember = ['member', 'administrator', 'creator'].includes(member.status);
             if (!isMember) {
+                // FIXED: Using Markup.button.url
                 const keyboard = Markup.inlineKeyboard([
-                    [Markup.urlButton("🔒 JOIN OUR PRIVATE CHANNEL", "https://t.me/+0Nw5y6axaAszZTA1")]
+                    [Markup.button.url("🔒 JOIN OUR PRIVATE CHANNEL", "https://t.me/+0Nw5y6axaAszZTA1")]
                 ]);
                 return ctx.reply('⛔️ **ACCESS REQUIRED!** ⛔️\n\n**YOU MUST BE A MEMBER OF THE CHANNEL TO USE COMMANDS.**', keyboard);
             }
@@ -121,8 +124,9 @@ bot.use(async (ctx, next) => {
             let hasBalance = userData.balance >= COST_PER_SEARCH;
 
             if (!isFree && !hasBalance) {
+                // FIXED: Using Markup.button.url
                 const keyboard = Markup.inlineKeyboard([
-                    [Markup.urlButton(`💰 DEPOSIT MONEY (2 TK/SEARCH)`, "YOUR_PAYMENT_LINK")] 
+                    [Markup.button.url(`💰 DEPOSIT MONEY (2 TK/SEARCH)`, "YOUR_PAYMENT_LINK")] 
                 ]);
                 return ctx.reply(
                     `⛔️ **LOW BALANCE!** ⛔️\n\n**YOUR BALANCE IS ${userData.balance} TK. EACH SEARCH COSTS ${COST_PER_SEARCH} TK.**\n\n**FREE TRIAL OVER. PLEASE DEPOSIT TO CONTINUE.**`,
@@ -182,8 +186,9 @@ async function fetchAndSendReport(ctx, apiEndpoint, paramValue, targetName) {
 
 // COMMAND: /start
 bot.start((ctx) => {
+    // FIXED: Using Markup.button.url
     const keyboard = Markup.inlineKeyboard([
-        [Markup.urlButton("🔒 JOIN OUR PRIVATE CHANNEL", "https://t.me/+0Nw5y6axaAszZTA1")]
+        [Markup.button.url("🔒 JOIN OUR PRIVATE CHANNEL", "https://t.me/+0Nw5y6axaAszZTA1")]
     ]);
 
     ctx.reply(
