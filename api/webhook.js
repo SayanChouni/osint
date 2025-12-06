@@ -4,9 +4,9 @@ const axios = require('axios');
 const { MongoClient } = require('mongodb');
 
 // --- CONFIGURATION: Environment Variables ---
-// IMPORTANT: ID গুলি parseInt করা হয়েছে, তাই Vercel এ শুধুমাত্র সংখ্যাটি দিন, কোনো স্পেস নয়।
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const COMMAND_GROUP_ID = parseInt(process.env.COMMAND_GROUP_ID); 
+
+// COMMAND_GROUP_ID is REMOVED as the bot is now private chat focused.
 const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531'; 
 
 // MongoDB Configuration 
@@ -52,7 +52,6 @@ async function connectDB() {
         // console.log("MongoDB Connected successfully");
     } catch (e) {
         console.error("MongoDB connection failed:", e);
-        // Throw error to stop bot operations
         throw new Error("Database connection failed. Check MONGODB_URI.");
     }
 }
@@ -80,26 +79,17 @@ bot.use(async (ctx, next) => {
     
     const chat = ctx.chat;
     const user = ctx.from;
-    const isCommand = ctx.message && (ctx.message.text.startsWith('/num') || ctx.message.text.startsWith('/adr') || ctx.message.text.startsWith('/v') || ctx.message.text.startsWith('/pin'));
+    const isCommand = ctx.message && (ctx.message.text && (ctx.message.text.startsWith('/num') || ctx.message.text.startsWith('/adr') || ctx.message.text.startsWith('/v') || ctx.message.text.startsWith('/pin') || ctx.message.text.startsWith('/balance')));
 
-    // 1. Group Exclusivity Check (Problem Solver)
-    // chat.id (Integer) and COMMAND_GROUP_ID (Integer) comparison
-    if (chat && chat.id !== COMMAND_GROUP_ID) {
-        // Only reply if the chat type is private or supergroup (to prevent spam in other groups)
-        if (chat.type === 'private' || chat.type === 'supergroup' || chat.type === 'group') {
-            const keyboard = Markup.inlineKeyboard([
-                [Markup.urlButton("➡️ USE ME HERE (GROUP)", "https://t.me/+3TSyKHmwOvRmNDJl")]
-            ]);
-            return ctx.reply('🚫 **ACCESS DENIED!** 🚫\n\n**PLEASE USE THIS BOT ONLY IN OUR AUTHORIZED GROUP.**', keyboard);
-        }
-        return; 
+    // 1. ONLY process commands in private chat
+    if (isCommand && chat.type !== 'private') {
+         return ctx.reply('⚠️ **PLEASE USE THIS BOT IN PRIVATE CHAT.** ⚠️');
     }
     
     // 2. Maintenance Mode Check 
     if (MAINTENANCE_MODE && ctx.from.id !== ADMIN_USER_ID) {
         return ctx.reply('🛠️ **MAINTENANCE MODE!** 🛠️\n\n**THE BOT IS CURRENTLY UNDER MAINTENANCE. PLEASE TRY AGAIN LATER.**');
     }
-
 
     if (isCommand) {
         const userData = await getUserData(user.id);
@@ -114,21 +104,19 @@ bot.use(async (ctx, next) => {
             const isMember = ['member', 'administrator', 'creator'].includes(member.status);
             if (!isMember) {
                 const keyboard = Markup.inlineKeyboard([
-                    [Markup.urlButton("➡️ USE ME HERE (GROUP)", "https://t.me/+3TSyKHmwOvRmNDJl")],
                     [Markup.urlButton("🔒 JOIN OUR PRIVATE CHANNEL", "https://t.me/+0Nw5y6axaAszZTA1")]
                 ]);
-                return ctx.reply('⛔️ **ACCESS REQUIRED!** ⛔️\n\n**YOU MUST BE A MEMBER OF BOTH THE CHANNEL AND THE GROUP.**', keyboard);
+                return ctx.reply('⛔️ **ACCESS REQUIRED!** ⛔️\n\n**YOU MUST BE A MEMBER OF THE CHANNEL TO USE COMMANDS.**', keyboard);
             }
         } catch (error) {
             console.error("Channel check error:", error.message);
-            // This error often means the bot is not an admin in the private channel
             if (error.message.includes('chat member status is inaccessible')) {
                  return ctx.reply('⚠️ **CONFIG ERROR!** ⚠️\n\n**PLEASE MAKE SURE THE BOT IS AN ADMIN IN THE PRIVATE CHANNEL.**');
             }
         }
 
-        // 4. Credit/Trial Check (Only if not Admin)
-        if (userData.role !== 'admin') {
+        // 4. Credit/Trial Check (Only if not Admin and not /balance command)
+        if (userData.role !== 'admin' && !ctx.message.text.startsWith('/balance')) {
             let isFree = userData.search_count < FREE_TRIAL_LIMIT;
             let hasBalance = userData.balance >= COST_PER_SEARCH;
 
@@ -195,12 +183,11 @@ async function fetchAndSendReport(ctx, apiEndpoint, paramValue, targetName) {
 // COMMAND: /start
 bot.start((ctx) => {
     const keyboard = Markup.inlineKeyboard([
-        [Markup.urlButton("➡️ USE ME HERE (GROUP)", "https://t.me/+3TSyKHmwOvRmNDJl")],
         [Markup.urlButton("🔒 JOIN OUR PRIVATE CHANNEL", "https://t.me/+0Nw5y6axaAszZTA1")]
     ]);
 
     ctx.reply(
-        '👋 **WELCOME TO OSINT BOT!** 🥳\n\n**YOU GET 2 FREE SEARCHES! EACH SEARCH COSTS 2 TK AFTER TRIAL.**\n\n**CLICK BELOW TO JOIN:**',
+        '👋 **WELCOME TO OSINT BOT!** 🥳\n\n**THIS BOT WORKS ONLY IN PRIVATE CHAT.**\n**YOU GET 2 FREE SEARCHES! EACH SEARCH COSTS 2 TK AFTER TRIAL.**\n\n**YOU MUST JOIN THE CHANNEL BELOW TO USE COMMANDS:**',
         keyboard
     );
 });
