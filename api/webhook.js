@@ -4,6 +4,7 @@ const axios = require('axios');
 const { MongoClient } = require('mongodb');
 
 // --- CONFIGURATION: Environment Variables ---
+// IMPORTANT: ID গুলি parseInt করা হয়েছে, তাই Vercel এ শুধুমাত্র সংখ্যাটি দিন, কোনো স্পেস নয়।
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const COMMAND_GROUP_ID = parseInt(process.env.COMMAND_GROUP_ID); 
 const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531'; 
@@ -40,6 +41,10 @@ let usersCollection;
 
 async function connectDB() {
     if (usersCollection) return;
+    if (!MONGODB_URI) {
+        console.error("MONGODB_URI is not set.");
+        throw new Error("Database connection failed: MONGODB_URI missing.");
+    }
     try {
         await client.connect();
         const db = client.db(DB_NAME);
@@ -47,7 +52,7 @@ async function connectDB() {
         // console.log("MongoDB Connected successfully");
     } catch (e) {
         console.error("MongoDB connection failed:", e);
-        // Vercel deployment will fail if MONGODB_URI is bad
+        // Throw error to stop bot operations
         throw new Error("Database connection failed. Check MONGODB_URI.");
     }
 }
@@ -72,38 +77,38 @@ async function getUserData(userId) {
 
 // --- ACCESS AND PAYMENT CHECK MIDDLEWARE ---
 bot.use(async (ctx, next) => {
-    // Check if essential IDs are available (useful for debugging Vercel ENV)
-    if (!COMMAND_GROUP_ID || !MANDATORY_CHANNEL_ID || !MONGODB_URI) {
-        console.error("Critical ENV variables missing.");
-        return ctx.reply("❌ **CRITICAL ERROR!** ❌\n\n**ENV VARIABLES ARE NOT SET UP CORRECTLY.**");
-    }
-
-    // 1. Maintenance Mode Check
-    if (MAINTENANCE_MODE && ctx.from.id !== ADMIN_USER_ID) {
-        return ctx.reply('🛠️ **MAINTENANCE MODE!** 🛠️\n\n**THE BOT IS CURRENTLY UNDER MAINTENANCE. PLEASE TRY AGAIN LATER.**');
-    }
-
+    
     const chat = ctx.chat;
     const user = ctx.from;
     const isCommand = ctx.message && (ctx.message.text.startsWith('/num') || ctx.message.text.startsWith('/adr') || ctx.message.text.startsWith('/v') || ctx.message.text.startsWith('/pin'));
 
-    // 2. Group Exclusivity Check
+    // 1. Group Exclusivity Check (Problem Solver)
+    // chat.id (Integer) and COMMAND_GROUP_ID (Integer) comparison
     if (chat && chat.id !== COMMAND_GROUP_ID) {
-        if (chat.type === 'private') {
-            ctx.reply('🚫 **ACCESS DENIED!** 🚫\n\n**PLEASE USE THIS BOT ONLY IN OUR AUTHORIZED GROUP.**');
-        } 
+        // Only reply if the chat type is private or supergroup (to prevent spam in other groups)
+        if (chat.type === 'private' || chat.type === 'supergroup' || chat.type === 'group') {
+            const keyboard = Markup.inlineKeyboard([
+                [Markup.urlButton("➡️ USE ME HERE (GROUP)", "https://t.me/+3TSyKHmwOvRmNDJl")]
+            ]);
+            return ctx.reply('🚫 **ACCESS DENIED!** 🚫\n\n**PLEASE USE THIS BOT ONLY IN OUR AUTHORIZED GROUP.**', keyboard);
+        }
         return; 
     }
+    
+    // 2. Maintenance Mode Check 
+    if (MAINTENANCE_MODE && ctx.from.id !== ADMIN_USER_ID) {
+        return ctx.reply('🛠️ **MAINTENANCE MODE!** 🛠️\n\n**THE BOT IS CURRENTLY UNDER MAINTENANCE. PLEASE TRY AGAIN LATER.**');
+    }
+
 
     if (isCommand) {
         const userData = await getUserData(user.id);
         
-        // Check for Suspension
         if (userData.is_suspended) {
              return ctx.reply('⚠️ **ACCOUNT SUSPENDED!** 🚫\n\n**PLEASE CONTACT THE ADMIN.**');
         }
 
-        // 3. Mandatory Channel Join Check (Simplified)
+        // 3. Mandatory Channel Join Check 
         try {
             const member = await ctx.telegram.getChatMember(MANDATORY_CHANNEL_ID, user.id);
             const isMember = ['member', 'administrator', 'creator'].includes(member.status);
@@ -116,6 +121,10 @@ bot.use(async (ctx, next) => {
             }
         } catch (error) {
             console.error("Channel check error:", error.message);
+            // This error often means the bot is not an admin in the private channel
+            if (error.message.includes('chat member status is inaccessible')) {
+                 return ctx.reply('⚠️ **CONFIG ERROR!** ⚠️\n\n**PLEASE MAKE SURE THE BOT IS AN ADMIN IN THE PRIVATE CHANNEL.**');
+            }
         }
 
         // 4. Credit/Trial Check (Only if not Admin)
@@ -142,7 +151,6 @@ bot.use(async (ctx, next) => {
 
             await usersCollection.updateOne({ _id: user.id }, updateQuery);
 
-            // Notify user of transaction status
             const currentStatus = await usersCollection.findOne({ _id: user.id });
             const freeLeft = Math.max(0, FREE_TRIAL_LIMIT - currentStatus.search_count);
             ctx.reply(`💳 **TRANSACTION SUCCESSFUL!**\n\n**COST:** ${isFree ? '0' : COST_PER_SEARCH} TK. **BALANCE LEFT:** ${currentStatus.balance} TK. **FREE USES LEFT:** ${freeLeft}.`);
@@ -155,7 +163,6 @@ bot.use(async (ctx, next) => {
 // --- API HANDLER FUNCTION (General) ---
 
 async function fetchAndSendReport(ctx, apiEndpoint, paramValue, targetName) {
-    // ... (logic remains the same as provided in previous answer) ...
     if (!paramValue) {
         return ctx.reply(`👉 **INPUT MISSING!** 🥺\n\n**PLEASE PROVIDE A VALID ${targetName}.**`);
     }
@@ -187,7 +194,6 @@ async function fetchAndSendReport(ctx, apiEndpoint, paramValue, targetName) {
 
 // COMMAND: /start
 bot.start((ctx) => {
-    // ... (logic remains the same as provided in previous answer) ...
     const keyboard = Markup.inlineKeyboard([
         [Markup.urlButton("➡️ USE ME HERE (GROUP)", "https://t.me/+3TSyKHmwOvRmNDJl")],
         [Markup.urlButton("🔒 JOIN OUR PRIVATE CHANNEL", "https://t.me/+0Nw5y6axaAszZTA1")]
@@ -352,7 +358,6 @@ bot.command('maintenance_off', adminCheck, (ctx) => {
 
 // --- Vercel Webhook Handling ---
 module.exports = async (req, res) => {
-    // Ensure DB connection is established before processing webhook
     try {
         await connectDB();
         if (req.method === 'POST') {
