@@ -1,155 +1,159 @@
-// required libraries
+// FILE: index.js
+// Minimal inline comments; configuration & why-notes only where appropriate.
+
+// --- Required libs ---
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
 
-// --- CONFIGURATION: Environment Variables ---
+// --- CONFIG: Environment Variables (sane defaults where applicable) ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531'; 
-// NOTE: MANDATORY_CHANNEL_ID now holds the MANDATORY GROUP ID
-
-// MongoDB Configuration 
 const MONGODB_URI = process.env.MONGODB_URI;
-const DB_NAME = "osint_user_db"; 
-const COLLECTION_NAME = "users";
+const DB_NAME = process.env.DB_NAME || 'osint_user_db';
+const COLLECTION_NAME = process.env.COLLECTION_NAME || 'users';
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID, 10) : null;
 
-const FREE_TRIAL_LIMIT = 1; // <--- FIXED: 1 FREE SEARCH
-const COST_PER_SEARCH = 2; 
+const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531'; // can be group id
+const GROUP_JOIN_LINK = "https://t.me/+3TSyKHmwOvRmNDJl"; // FINAL: confirmed by you (A)
 
-const ADMIN_USER_ID = parseInt(process.env.ADMIN_USER_ID); 
-
-// API CONFIG
+// API keys: prefer environment variables; fallback to old keys if present
 const API_CONFIG = {
-    NUM_API_SUITE: {
-        NAME_FINDER: "https://m.apisuite.in/?api=namefinder&api_key=2907591571c0d74b89dc1244a1bb1715&number=",
-        AADHAAR_FINDER: "https://m.apisuite.in/?api=number-to-aadhaar&api_key=2907591571c0d74b89dc1244a1bb1715&number="
-    },
-    ADHAR_API: "https://aadhar-info-vishal.0001.net/api2/V2/adhar.php",
-    VECHIL_API: "https://reseller-host.vercel.app/api/rc",
-    PIN_API: "https://pin-code-info-vishal.22web.org/pincode_api.php",
-    ADHAR_KEY: "FREE"
+  NUM_API_SUITE: {
+    NAME_FINDER: process.env.APISUITE_NAMEFINDER || "https://m.apisuite.in/?api=namefinder&api_key=2907591571c0d74b89dc1244a1bb1715&number=",
+    AADHAAR_FINDER: process.env.APISUITE_AADHAAR || "https://m.apisuite.in/?api=number-to-aadhaar&api_key=2907591571c0d74b89dc1244a1bb1715&number="
+  },
+  ADHAR_API: process.env.ADHAR_API || "https://aadhar-info-vishal.0001.net/api2/V2/adhar.php",
+  VECHIL_API: process.env.VECHIL_API || "https://reseller-host.vercel.app/api/rc",
+  PIN_API: process.env.PIN_API || "https://pin-code-info-vishal.22web.org/pincode_api.php",
+  ADHAR_KEY: process.env.ADHAR_KEY || "FREE"
 };
 
-let MAINTENANCE_MODE = false;
+// Cost & trial settings
+const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || "1", 10);
+const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || "2", 10);
 
-// New Options for Vercel/Serverless Environment (for stable connection)
-const client = new MongoClient(MONGODB_URI, {
-    serverSelectionTimeoutMS: 5000, 
-    socketTimeoutMS: 45000,
-    maxPoolSize: 1 
+// Maintenance mode toggle (admin only bypass)
+let MAINTENANCE_MODE = (process.env.MAINTENANCE_MODE === '1');
+
+// --- MongoDB client setup (tuned for serverless) ---
+if (!MONGODB_URI) {
+  console.error("MONGODB_URI is required in env.");
+  process.exit(1);
+}
+
+const mongoClient = new MongoClient(MONGODB_URI, {
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
+  // small pool to avoid serverless overload
+  maxPoolSize: 1
 });
 
-let usersCollection;
+let usersCollection = null;
+async function connectDB() {
+  if (usersCollection) return;
+  await mongoClient.connect();
+  const db = mongoClient.db(DB_NAME);
+  usersCollection = db.collection(COLLECTION_NAME);
+}
+
+// --- Telegraf bot init ---
+if (!BOT_TOKEN) {
+  console.error("BOT_TOKEN is required in env.");
+  process.exit(1);
+}
 const bot = new Telegraf(BOT_TOKEN);
 
-const GROUP_JOIN_LINK = "https://t.me/+0Nw5y6axaAszZTA1"; // Update with your actual group invite link
-
-
-// --- MongoDB Setup ---
-async function connectDB() {
-    if (usersCollection) return;
-    if (!MONGODB_URI) {
-        console.error("MONGODB_URI is not set.");
-        throw new Error("Database connection failed: MONGODB_URI missing.");
-    }
-    try {
-        await client.connect();
-        const db = client.db(DB_NAME);
-        usersCollection = db.collection(COLLECTION_NAME);
-    } catch (e) {
-        console.error("MongoDB connection failed:", e);
-        throw new Error("Database connection failed. Check MONGODB_URI.");
-    }
-}
-
+// --- Utility functions ---
 async function getUserData(userId) {
-    await connectDB();
-    const user = await usersCollection.findOne({ _id: userId });
-    
-    if (!user) {
-        const newUser = {
-            _id: userId,
-            balance: 0,
-            search_count: 0,
-            is_suspended: false,
-            role: (userId === ADMIN_USER_ID ? 'admin' : 'user'),
-            admin_state: null 
-        };
-        await usersCollection.insertOne(newUser);
-        return newUser;
-    }
-    return user;
+  await connectDB();
+  const user = await usersCollection.findOne({ _id: userId });
+  if (!user) {
+    const newUser = {
+      _id: userId,
+      balance: 0,
+      search_count: 0,
+      is_suspended: false,
+      role: (userId === ADMIN_USER_ID ? 'admin' : 'user'),
+      admin_state: null
+    };
+    await usersCollection.insertOne(newUser);
+    return newUser;
+  }
+  return user;
 }
 
-/**
- * Checks if the user is a member of the mandatory group/channel.
- * Returns true if member, false otherwise.
- */
+// Returns true if the user is member/creator/admin in mandatory group
 async function checkMembership(ctx) {
-    try {
-        const member = await ctx.telegram.getChatMember(MANDATORY_CHANNEL_ID, ctx.from.id);
-        const isMember = ['member', 'administrator', 'creator'].includes(member.status);
-        return isMember;
-    } catch (error) {
-        console.error("Membership check error:", error.message);
-        return false; 
-    }
+  try {
+    const member = await ctx.telegram.getChatMember(MANDATORY_CHANNEL_ID, ctx.from.id);
+    return ['member', 'administrator', 'creator'].includes(member.status);
+  } catch (err) {
+    console.error("Membership check error:", err.message);
+    return false;
+  }
 }
 
+// Generic API fetch & send as txt (used by multiple commands)
+async function sendTextReport(ctx, filename, content, caption) {
+  const buffer = Buffer.from(typeof content === 'string' ? content : JSON.stringify(content, null, 2), 'utf8');
+  try {
+    await ctx.replyWithDocument({ source: buffer, filename }, { caption, parse_mode: 'Markdown' });
+  } catch (err) {
+    console.error("Error sending document:", err.message);
+    // Fallback to plain message if document send fails
+    await ctx.reply(`${caption}\n\n${typeof content === 'string' ? content : 'See attached data (failed to send file).'}`);
+  }
+}
 
-// --- ACCESS AND PAYMENT CHECK MIDDLEWARE ---
+// --- Middleware: checks & charges ---
 bot.use(async (ctx, next) => {
-    
-    const chat = ctx.chat;
-    const user = ctx.from;
-    const text = ctx.message ? ctx.message.text : '';
-    const isCommand = text && (text.startsWith('/num') || text.startsWith('/adr') || text.startsWith('/v') || text.startsWith('/pin') || text.startsWith('/balance') || text.startsWith('/donate') || text.startsWith('/support') || text.startsWith('/buyapi') || text.startsWith('/admin') || text.startsWith('/status'));
+  // Some updates may not have message (e.g., callback_query), extract text safely
+  const text = (ctx.message && ctx.message.text) ? ctx.message.text.trim() : '';
+  const isCommand = text && /^\/(num|adr|v|pin|balance|donate|support|buyapi|admin|status)\b/.test(text);
 
-    // Skip all checks for /start command by going directly to the handler
-    if (text.startsWith('/start')) {
-        return next();
+  // always allow /start through (handled in start)
+  if (text.startsWith('/start')) return next();
+
+  // Only process commands in private chat
+  const chatType = (ctx.chat && ctx.chat.type) ? ctx.chat.type : 'private';
+  if (isCommand && chatType !== 'private') {
+    return ctx.reply('⚠️ **PLEASE USE THIS BOT IN PRIVATE CHAT.** ⚠️', { parse_mode: 'Markdown' });
+  }
+
+  // Maintenance mode block (admin bypass)
+  if (MAINTENANCE_MODE && ctx.from.id !== ADMIN_USER_ID) {
+    return ctx.reply('🛠️ **MAINTENANCE MODE!**\n\n**The bot is currently under maintenance. Please try again later.**', { parse_mode: 'Markdown' });
+  }
+
+  if (isCommand) {
+    const userData = await getUserData(ctx.from.id);
+
+    // Admin inline input handling: if admin has admin_state and sends text (not /admin), allow handler to process later
+    if (userData.role === 'admin' && userData.admin_state && !text.startsWith('/admin')) {
+      // let downstream handlers handle it (stateful admin)
+      return next();
     }
-    
-    // 1. ONLY process commands in private chat
-    if (isCommand && chat.type !== 'private') {
-         return ctx.reply('⚠️ **PLEASE USE THIS BOT IN PRIVATE CHAT.** ⚠️');
-    }
-    
-    // 2. Maintenance Mode Check 
-    if (MAINTENANCE_MODE && ctx.from.id !== ADMIN_USER_ID) {
-        return ctx.reply('🛠️ **MAINTENANCE MODE!** 🛠️\n\n**THE BOT IS CURRENTLY UNDER MAINTENANCE. PLEASE TRY AGAIN LATER.**');
+
+    if (userData.is_suspended) {
+      return ctx.reply('⚠️ **ACCOUNT SUSPENDED!** 🚫\n\n**PLEASE CONTACT THE ADMIN.**', { parse_mode: 'Markdown' });
     }
 
-    if (isCommand) {
-        const userData = await getUserData(user.id);
-        
-        // 2a. Handle Admin Panel Input via text message (Stateful Logic)
-        if (userData.role === 'admin' && userData.admin_state && !text.startsWith('/admin')) {
-            return bot.handleUpdate(ctx.update); 
-        }
+    // Membership enforcement
+    const isMember = await checkMembership(ctx);
+    if (!isMember) {
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.url("🔒 JOIN MANDATORY GROUP", GROUP_JOIN_LINK)]
+      ]);
+      return ctx.reply('⛔️ **ACCESS REQUIRED!** ⛔️\n\n**YOU MUST BE A MEMBER OF THE GROUP TO USE COMMANDS. Use /start.**', keyboard);
+    }
 
-        if (userData.is_suspended) {
-             return ctx.reply('⚠️ **ACCOUNT SUSPENDED!** 🚫\n\n**PLEASE CONTACT THE ADMIN.**');
-        }
+    // Credit / trial deduction (skip for admin and non-charge commands)
+    if (userData.role !== 'admin' && !/^\/(balance|donate|support|buyapi)\b/.test(text)) {
+      const isFree = userData.search_count < FREE_TRIAL_LIMIT;
+      const hasBalance = userData.balance >= COST_PER_SEARCH;
 
-        // 3. Mandatory Group Join Check 
-        const isMember = await checkMembership(ctx);
-        if (!isMember) {
-            const keyboard = Markup.inlineKeyboard([
-                [Markup.button.url("🔒 JOIN MANDATORY GROUP", GROUP_JOIN_LINK)]
-            ]);
-            // CHANGED: Removed "CHANNEL" from message
-            return ctx.reply('⛔️ **ACCESS REQUIRED!** ⛔️\n\n**YOU MUST BE A MEMBER OF THE GROUP TO USE COMMANDS. Use /start.**', keyboard);
-        }
-
-        // 4. Credit/Trial Check (Only if not Admin and not /balance or support command)
-        if (userData.role !== 'admin' && !text.startsWith('/balance') && !text.startsWith('/donate') && !text.startsWith('/support') && !text.startsWith('/buyapi')) {
-            let isFree = userData.search_count < FREE_TRIAL_LIMIT;
-            let hasBalance = userData.balance >= COST_PER_SEARCH;
-
-            if (!isFree && !hasBalance) {
-                // FIXED: Custom Insufficient Balance Message
-                const insufficientBalanceMessage = `
+      if (!isFree && !hasBalance) {
+        const insufficientBalanceMessage = `
 ⚠️ **INSUFFICIENT BALANCE!**
 
 **YOU HAVE ALREADY USED YOUR ${FREE_TRIAL_LIMIT} FREE SEARCH.**
@@ -158,316 +162,274 @@ bot.use(async (ctx, next) => {
 **AFTER RECHARGE, YOU WILL BE ABLE TO USE ALL FEATURES WITHOUT ANY INTERRUPTION! 🔥**
 **FOR CREDIT TOP-UP, PLEASE CONTACT: @ZECBOY 📩**
 **THANK YOU FOR USING OUR SERVICE! 😊💙**`;
+        return ctx.reply(insufficientBalanceMessage, { parse_mode: 'Markdown' });
+      }
 
-                return ctx.reply(insufficientBalanceMessage, { parse_mode: 'Markdown' });
-            }
-            
-            // 5. Deduct Credit/Update Trial Count
-            let updateQuery = { $inc: { search_count: 1 } };
-            
-            if (!isFree) {
-                updateQuery.$inc.balance = -COST_PER_SEARCH;
-            }
-
-            await usersCollection.updateOne({ _id: user.id }, updateQuery);
-
-            const currentStatus = await usersCollection.findOne({ _id: user.id });
-            const freeLeft = Math.max(0, FREE_TRIAL_LIMIT - currentStatus.search_count);
-            ctx.reply(`💳 **TRANSACTION SUCCESSFUL!**\n\n**COST:** ${isFree ? '0' : COST_PER_SEARCH} TK. **BALANCE LEFT:** ${currentStatus.balance} TK. **FREE USES LEFT:** ${freeLeft}.`);
-        }
+      // Deduct or increment usage count atomically
+      const updateOps = { $inc: { search_count: 1 } };
+      if (!isFree) updateOps.$inc.balance = -COST_PER_SEARCH;
+      await usersCollection.updateOne({ _id: ctx.from.id }, updateOps);
+      const updated = await usersCollection.findOne({ _id: ctx.from.id });
+      const freeLeft = Math.max(0, FREE_TRIAL_LIMIT - updated.search_count);
+      await ctx.reply(`💳 **TRANSACTION SUCCESSFUL!**\n\n**COST:** ${isFree ? '0' : COST_PER_SEARCH} TK. **BALANCE LEFT:** ${updated.balance} TK. **FREE USES LEFT:** ${freeLeft}.`, { parse_mode: 'Markdown' });
     }
+  }
 
-    return next();
+  return next();
 });
 
-
-// --- API HANDLER FUNCTION (General) ---
-
-async function fetchAndSendReport(ctx, apiEndpoint, paramValue, targetName) {
-    if (!paramValue) {
-        return ctx.reply(`👉 **INPUT MISSING!** 🥺\n\n**PLEASE PROVIDE A VALID ${targetName}.**`);
-    }
-    
-    ctx.reply(`🔎 **SEARCHING!** 🧐\n\n**INITIATING SCAN FOR ${targetName}:** \`${paramValue}\`...`, { parse_mode: 'Markdown' });
-
-    try {
-        const response = await axios.get(apiEndpoint);
-        const resultData = response.data;
-        
-        const outputText = typeof resultData === 'object' ? 
-            `**--- OSINT REPORT ---**\n**Target:** ${targetName} ${paramValue}\n\n${JSON.stringify(resultData, null, 2)}` : 
-            `**--- OSINT REPORT ---**\n**Target:** ${targetName} ${paramValue}\n\n${resultData}`;
-        
-        return ctx.replyWithDocument(
-            { source: Buffer.from(outputText, 'utf-8'), filename: `osint_report_${targetName}_${paramValue}.txt` },
-            { caption: `✅ **SUCCESS!** 🥳\n\n**OSINT REPORT GENERATED FOR ${targetName}.**` }
-        );
-
-    } catch (error) {
-        console.error(`Error fetching ${targetName} info:`, error.message);
-        const errorMsg = error.response ? JSON.stringify(error.response.data, null, 2) : error.message;
-        return ctx.reply(`❌ **API ERROR!** 🤯\n\n**FAILED TO FETCH DATA. CHECK TARGET INPUT AND API STATUS.**\n**ERROR MESSAGE:** \`${errorMsg}\``, { parse_mode: 'Markdown' });
-    }
-}
-
-
-// --- COMMAND HANDLERS SETUP ---
-
-// COMMAND: /start (Conditional Welcome)
+// --- COMMAND: /start ---
 bot.start(async (ctx) => {
-    const isMember = await checkMembership(ctx);
-    
-    if (isMember) {
-        // Option 1: User is a member, show the main menu
-        const welcomeMessage = `
-**┏━━✨INFORA PRO ✨━━┓**
+  const isMember = await checkMembership(ctx);
+  if (isMember) {
+    const welcomeMessage = `
+**┏━━✨ INFORA PRO ✨━━┓**
 
 👋 **Hey! I’m your OSINT/Search copilot—fast, precise & private.**
-📊 **ONE TIME FREE TRAIL**
+📊 **ONE TIME FREE TRIAL**
 **• PER searches cost ${COST_PER_SEARCH} credit 💳**
 **• Works in BOT only for privacy 👥🔐**
 
 **— — — — — — — — — — — — — — — — — —**
 🔎 **Basic Lookups**
-**• /num <phone> — 10-digit mobile details**
-**• /adr <aadhar> — Aadhaar (12-digit) info**
-**• /familyinfo <aadhar> — Family lookup by Aadhaar (consent required)**
-**• /v <vehicle> — Vehicle number lookup**
-**• /pin <pincode> —— Area pin code look up** **🛠 Support & Extras**
-**• /balance — Balance & searches**
-**• /donate — Support the project**
-**• /support — Contact support**
-**• /buyapi — Private API access**
-
+• /num <phone> — 10-digit mobile details
+• /adr <aadhar> — Aadhaar (12-digit) info
+• /familyinfo <aadhar> — Family lookup (not implemented)
+• /v <vehicle> — Vehicle number lookup
+• /pin <pincode> — Area pin code look up
 **— — — — — — — — — — — — — — — — — —**
 **⚡️ Powered by: @zecboy**
 **🌐 Stay Safe • Respect Privacy • Use Responsibly 🚀**
-        `;
-        ctx.reply(welcomeMessage, { parse_mode: 'Markdown' });
-
-    } else {
-        // Option 2: User is NOT a member, show join prompt
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.url("🔒 JOIN MANDATORY GROUP", GROUP_JOIN_LINK)]
-        ]);
-
-        ctx.reply(
-            // CHANGED: Display 1 FREE SEARCH
-            '👋 **WELCOME TO OSINT BOT!** 🥳\n\n**THIS BOT WORKS ONLY IN PRIVATE CHAT.**\n**YOU GET 1 FREE SEARCH! EACH SEARCH COSTS 2 TK AFTER TRIAL.**\n\n**YOU MUST JOIN THE GROUP BELOW TO USE COMMANDS:**',
-            keyboard
-        );
-    }
+`;
+    return ctx.reply(welcomeMessage, { parse_mode: 'Markdown' });
+  } else {
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.url("🔒 JOIN MANDATORY GROUP", GROUP_JOIN_LINK)]
+    ]);
+    return ctx.reply('👋 **WELCOME TO OSINT BOT!** 🥳\n\n**THIS BOT WORKS ONLY IN PRIVATE CHAT.**\n**YOU GET 1 FREE SEARCH! EACH SEARCH COSTS 2 TK AFTER TRIAL.**\n\n**YOU MUST JOIN THE GROUP BELOW TO USE COMMANDS:**', keyboard);
+  }
 });
 
-// COMMAND: /balance (renamed from /credits in menu)
+// --- COMMAND: /balance ---
 bot.command('balance', async (ctx) => {
-    const userData = await getUserData(ctx.from.id);
-    const usesLeft = Math.max(0, FREE_TRIAL_LIMIT - userData.search_count);
-    
-    ctx.reply(`💰 **YOUR ACCOUNT BALANCE** 💰\n\n**BALANCE:** ${userData.balance} TK\n**FREE USES LEFT:** ${usesLeft}`);
+  const user = await getUserData(ctx.from.id);
+  const usesLeft = Math.max(0, FREE_TRIAL_LIMIT - user.search_count);
+  return ctx.reply(`💰 **YOUR ACCOUNT BALANCE** 💰\n\n**BALANCE:** ${user.balance} TK\n**FREE USES LEFT:** ${usesLeft}`, { parse_mode: 'Markdown' });
 });
 
-
-// --- NEW SUPPORT HANDLERS ---
+// --- SIMPLE SUPPORT COMMANDS ---
 const supportResponse = '**✨ MESSAGE HERE**\n\n**F E E L . F R E E . T O . D M**\n\n**👉 @zecboy**';
+bot.command(['donate', 'support', 'buyapi'], (ctx) => ctx.reply(supportResponse, { parse_mode: 'Markdown' }));
 
-bot.command(['donate', 'support', 'buyapi'], (ctx) => {
-    ctx.reply(supportResponse, { parse_mode: 'Markdown' });
-});
+// --- HELPER: generic fetch+send used by /adr, /v, /pin ---
+async function fetchAndSendReport(ctx, apiUrl, targetValue, targetName) {
+  if (!targetValue) {
+    return ctx.reply(`👉 **INPUT MISSING!** 🥺\n\n**PLEASE PROVIDE A VALID ${targetName}.**`);
+  }
 
+  await ctx.reply(`🔎 **SEARCHING!** 🧐\n\n**INITIATING SCAN FOR ${targetName}:** \`${targetValue}\`...`, { parse_mode: 'Markdown' });
 
-// --- BASIC LOOKUP COMMANDS ---
-// COMMAND: /num <phone> (COMBINED API)
-bot.command('num', async (ctx) => {
-    const phone = ctx.message.text.split(' ')[1];
-    if (!phone) {
-        return ctx.reply("👉 **INPUT MISSING!** 🥺\n\n**PLEASE PROVIDE A VALID PHONE NUMBER.**");
-    }
+  try {
+    const response = await axios.get(apiUrl, { timeout: 15000 });
+    const resultData = response.data;
+    const outputText = `**--- OSINT REPORT ---**\n**Target:** ${targetName} ${targetValue}\n\n${typeof resultData === 'object' ? JSON.stringify(resultData, null, 2) : resultData}`;
+    return sendTextReport(ctx, `osint_report_${targetName}_${targetValue}.txt`, outputText, `✅ **SUCCESS!**\n\n**OSINT REPORT GENERATED FOR ${targetName}.**`);
+  } catch (err) {
+    console.error(`Error fetching ${targetName} info:`, err.message);
+    const errorMsg = (err.response && err.response.data) ? JSON.stringify(err.response.data, null, 2) : err.message;
+    return ctx.reply(`❌ **API ERROR!** 🤯\n\n**FAILED TO FETCH DATA. CHECK TARGET INPUT AND API STATUS.**\n**ERROR:** \`${errorMsg}\``, { parse_mode: 'Markdown' });
+  }
+}
 
-    ctx.reply(`🔎 **SEARCHING!** 🧐\n\n**COMBINING DATA FOR PHONE NUMBER:** \`${phone}\`...`, { parse_mode: 'Markdown' });
-
-    try {
-        const [nameResponse, aadhaarResponse] = await Promise.all([
-            axios.get(`${API_CONFIG.NUM_API_SUITE.NAME_FINDER}${phone}`),
-            axios.get(`${API_CONFIG.NUM_API_SUITE.AADHAAR_FINDER}${phone}`)
-        ]);
-
-        const combinedResult = {
-            "PHONE_NUMBER": phone,
-            "NAME_FINDER_INFO": nameResponse.data,
-            "AADHAAR_INFO": aadhaarResponse.data,
-        };
-        
-        const outputText = `**--- COMBINED OSINT REPORT ---**\n**Target:** PHONE NUMBER ${phone}\n\n${JSON.stringify(combinedResult, null, 2)}`;
-        
-        return ctx.replyWithDocument(
-            { source: Buffer.from(outputText, 'utf-8'), filename: `osint_report_phone_${phone}.txt` },
-            { caption: `✅ **SUCCESS!** 🥳\n\n**COMPREHENSIVE REPORT GENERATED FOR PHONE NUMBER.**` }
-        );
-
-    } catch (error) {
-        console.error("Combined API Error:", error.message);
-        return ctx.reply(`❌ **API ERROR!** 🤯\n\n**FAILED TO GET DATA FROM ONE OR BOTH APIs. CHECK API KEYS/STATUS.**`);
-    }
-});
-
-// Other Commands using the general handler
+// --- COMMANDS: /adr, /v, /pin ---
 bot.command('adr', async (ctx) => {
-    const aadhaar = ctx.message.text.split(' ')[1];
-    const apiUrl = `${API_CONFIG.ADHAR_API}?key=${API_CONFIG.ADHAR_KEY}&aadhaar=${aadhaar}`;
-    await fetchAndSendReport(ctx, apiUrl, aadhaar, "AADHAR NUMBER");
+  const parts = ctx.message.text.split(/\s+/).filter(Boolean);
+  const aadhaar = parts[1];
+  const apiUrl = `${API_CONFIG.ADHAR_API}?key=${API_CONFIG.ADHAR_KEY}&aadhaar=${aadhaar}`;
+  return fetchAndSendReport(ctx, apiUrl, aadhaar, "AADHAR NUMBER");
 });
 
 bot.command('v', async (ctx) => {
-    const vehNumber = ctx.message.text.split(' ')[1];
-    const apiUrl = `${API_CONFIG.VECHIL_API}?number=${vehNumber}`;
-    await fetchAndSendReport(ctx, apiUrl, vehNumber, "VEHICLE NUMBER");
+  const parts = ctx.message.text.split(/\s+/).filter(Boolean);
+  const veh = parts[1];
+  const apiUrl = `${API_CONFIG.VECHIL_API}?number=${veh}`;
+  return fetchAndSendReport(ctx, apiUrl, veh, "VEHICLE NUMBER");
 });
 
 bot.command('pin', async (ctx) => {
-    const pincode = ctx.message.text.split(' ')[1];
-    const apiUrl = `${API_CONFIG.PIN_API}?pincode=${pincode}`;
-    await fetchAndSendReport(ctx, apiUrl, pincode, "PIN CODE");
+  const parts = ctx.message.text.split(/\s+/).filter(Boolean);
+  const pin = parts[1];
+  const apiUrl = `${API_CONFIG.PIN_API}?pincode=${pin}`;
+  return fetchAndSendReport(ctx, apiUrl, pin, "PIN CODE");
 });
 
-// Dummy command for /familyinfo
-bot.command('familyinfo', (ctx) => {
-    return ctx.reply("⚠️ **COMMAND INCOMPLETE!** ⚠️\n\n**API for family lookup is currently not implemented.**");
-});
+// --- /familyinfo placeholder ---
+bot.command('familyinfo', (ctx) => ctx.reply("⚠️ **COMMAND INCOMPLETE!** ⚠️\n\n**API for family lookup is currently not implemented.**"));
 
+// --- UPDATED /num COMMAND (PRIMARY -> FALLBACK logic) ---
+bot.command('num', async (ctx) => {
+  const parts = ctx.message.text.split(/\s+/).filter(Boolean);
+  const phone = parts[1];
+  if (!phone) return ctx.reply("👉 **INPUT MISSING!** 🥺\n\n**PLEASE PROVIDE A VALID PHONE NUMBER.**");
 
-// --- ADMIN PANEL COMMANDS ---
+  // Inform user quickly
+  await ctx.reply(`🔎 **SEARCHING...**\n\n**Checking primary database for:** \`${phone}\``, { parse_mode: 'Markdown' });
 
-const adminCheck = (ctx, next) => {
-    if (ctx.from.id !== ADMIN_USER_ID) return ctx.reply("❌ **ADMIN ACCESS DENIED.**");
-    return next();
-};
+  // STEP 1: Primary API
+  const primaryUrl = `http://osint-info.great-site.net/api.php?phone=${encodeURIComponent(phone)}`;
+  try {
+    const primaryResp = await axios.get(primaryUrl, { timeout: 15000 });
+    const data = primaryResp.data;
 
-// COMMAND: /admin (Admin Menu)
-bot.command('admin', adminCheck, (ctx) => {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('➕ ADD CREDIT', 'admin_add_credit')],
-        [Markup.button.callback('➖ REMOVE CREDIT', 'admin_remove_credit')],
-        [Markup.button.callback('🛑 SUSPEND USER', 'admin_suspend')],
-        [Markup.button.callback('🟢 UNBAN USER', 'admin_unban')],
-        [Markup.button.callback('👤 CHECK STATUS', 'admin_status')] 
+    // Consider non-empty body as valid result (string or object)
+    const primaryHasData = (data !== null && data !== undefined && (!(typeof data === 'string') || data.trim() !== ''));
+
+    if (primaryHasData) {
+      const txt = `--- PRIMARY OSINT REPORT ---\nPhone: ${phone}\n\n${typeof data === 'object' ? JSON.stringify(data, null, 2) : data}`;
+      return sendTextReport(ctx, `primary_${phone}.txt`, txt, "✅ **Primary database hit successful!**");
+    }
+    // else fallthrough to fallback APIs
+  } catch (err) {
+    console.log("Primary API error (will fallback):", err.message);
+  }
+
+  // STEP 2: Fallback APIs (run in parallel)
+  await ctx.reply(`⚠️ **Primary database empty or error.**\n\n➡️ Checking secondary APIs...`, { parse_mode: 'Markdown' });
+
+  try {
+    const nameUrl = `${API_CONFIG.NUM_API_SUITE.NAME_FINDER}${encodeURIComponent(phone)}`;
+    const aadhaarUrl = `${API_CONFIG.NUM_API_SUITE.AADHAAR_FINDER}${encodeURIComponent(phone)}`;
+
+    const [nameRes, aadhaarRes] = await Promise.allSettled([
+      axios.get(nameUrl, { timeout: 15000 }),
+      axios.get(aadhaarUrl, { timeout: 15000 })
     ]);
 
-    ctx.reply('👑 **ADMIN CONTROL PANEL** 👑\n\n**Select an action below:**', keyboard);
+    const combined = {
+      PHONE_NUMBER: phone,
+      NAME_FINDER_INFO: nameRes.status === 'fulfilled' ? (nameRes.value.data) : { error: nameRes.reason ? nameRes.reason.message : 'failed' },
+      AADHAAR_INFO: aadhaarRes.status === 'fulfilled' ? (aadhaarRes.value.data) : { error: aadhaarRes.reason ? aadhaarRes.reason.message : 'failed' }
+    };
+
+    const txt = `--- SECONDARY COMBINED REPORT ---\nPhone: ${phone}\n\n${JSON.stringify(combined, null, 2)}`;
+    return sendTextReport(ctx, `combined_${phone}.txt`, txt, "✅ **Secondary OSINT report generated!**");
+  } catch (err) {
+    console.error("Fallback APIs error:", err.message);
+    return ctx.reply("❌ **ALL APIs FAILED!**\nPlease try again later.");
+  }
 });
 
-// --- STATEFUL MESSAGE HANDLER (Admin Input Processing) ---
-bot.on('text', async (ctx, next) => {
-    const userId = ctx.from.id;
-    const userData = await getUserData(userId);
-
-    // Only process if the user is an admin and has an active state
-    if (userData.role === 'admin' && userData.admin_state && ctx.chat.type === 'private') {
-        const state = userData.admin_state;
-        const input = ctx.message.text.split(/\s+/).filter(Boolean);
-        
-        // Reset state after processing
-        await usersCollection.updateOne({ _id: userId }, { $set: { admin_state: null } });
-
-        if (state.includes('credit')) {
-            const [targetIdStr, amountStr] = input;
-            const targetId = parseInt(targetIdStr);
-            const amount = parseInt(amountStr);
-
-            if (!targetId || isNaN(targetId) || !amount || isNaN(amount)) {
-                return ctx.reply('❌ **INVALID FORMAT.** Please use: `UserID Amount`');
-            }
-            
-            const creditChange = state === 'admin_add_credit' ? amount : -amount;
-            const actionVerb = state === 'admin_add_credit' ? 'ADDED TO' : 'REMOVED FROM';
-
-            await usersCollection.updateOne(
-                { _id: targetId },
-                { $inc: { balance: creditChange } },
-                { upsert: true }
-            );
-
-            return ctx.reply(`✅ **SUCCESS!** 💰\n\n**${Math.abs(amount)} TK ${actionVerb} USER ${targetId}.**`);
-        } 
-        
-        else if (state === 'admin_suspend' || state === 'admin_unban') {
-            const targetId = parseInt(input[0]);
-            const isSuspended = state === 'admin_suspend';
-            
-            if (!targetId || isNaN(targetId)) {
-                return ctx.reply('❌ **INVALID FORMAT.** Please use: `UserID`');
-            }
-            
-            await usersCollection.updateOne(
-                { _id: targetId },
-                { $set: { is_suspended: isSuspended } }
-            );
-
-            const statusVerb = isSuspended ? 'SUSPENDED' : 'UNBANNED';
-            return ctx.reply(`✅ **SUCCESS!** 🛑\n\n**USER ${targetId} HAS BEEN ${statusVerb}.**`);
-        } 
-        
-        else if (state === 'admin_status') {
-             const targetId = parseInt(input[0]);
-             if (!targetId || isNaN(targetId)) {
-                return ctx.reply('❌ **INVALID FORMAT.** Please use: `UserID`');
-             }
-             const tempCtx = { ...ctx, message: { text: `/status ${targetId}` } };
-             return bot.handleUpdate(tempCtx.update); 
-        }
-
-    }
-    
-    // If it's a normal message and not an admin command, pass it on
-    next();
-});
-
-// --- ACTION HANDLER (Button Clicks) ---
-bot.action(/admin_(.+)/, adminCheck, async (ctx) => {
-    // 1. Clean up the previous message/keyboard
-    ctx.editMessageReplyMarkup({}); 
-    
-    const action = ctx.match[1];
-    const userId = ctx.from.id;
-    
-    // 2. Set the Admin's state based on the button clicked
-    await usersCollection.updateOne({ _id: userId }, { $set: { admin_state: action } });
-
-    switch (action) {
-        case 'add_credit':
-            ctx.reply('👉 **ADD CREDIT MODE**\n\n**FORMAT:** `UserID Amount`\n\nExample: `123456789 50`');
-            break;
-        case 'remove_credit':
-            ctx.reply('👉 **REMOVE CREDIT MODE**\n\n**FORMAT:** `UserID Amount`\n\nExample: `123456789 20`');
-            break;
-        case 'suspend':
-            ctx.reply('👉 **SUSPEND USER MODE**\n\n**FORMAT:** `UserID`\n\nExample: `123456789`');
-            break;
-        case 'unban':
-            ctx.reply('👉 **UNBAN USER MODE**\n\n**FORMAT:** `UserID`\n\nExample: `123456789`');
-            break;
-        case 'status':
-            ctx.reply('👉 **CHECK STATUS MODE**\n\n**FORMAT:** `UserID`\n\nExample: `123456789`');
-            break;
-        default:
-            ctx.reply('⚠️ **UNKNOWN ACTION.**');
-    }
-    // Answer callback query to stop loading icon
-    ctx.answerCbQuery();
-});
-
-// --- Vercel Webhook Handling ---
-module.exports = async (req, res) => {
-    try {
-        await connectDB();
-        if (req.method === 'POST') {
-            await bot.handleUpdate(req.body);
-            res.status(200).send('OK');
-        } else {
-            res.status(200).send('OSINT Bot is running via Webhook.');
-        }
-    } catch (error) {
-        console.error('Webhook or DB Error:', error);
-        res.status(500).send(`Internal Server Error: ${error.message}`);
-    }
+// --- ADMIN PANEL (simple button-driven) ---
+const adminCheck = (ctx, next) => {
+  if (ctx.from.id !== ADMIN_USER_ID) return ctx.reply("❌ **ADMIN ACCESS DENIED.**");
+  return next();
 };
+
+bot.command('admin', adminCheck, async (ctx) => {
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('➕ ADD CREDIT', 'admin_add_credit')],
+    [Markup.button.callback('➖ REMOVE CREDIT', 'admin_remove_credit')],
+    [Markup.button.callback('🛑 SUSPEND USER', 'admin_suspend')],
+    [Markup.button.callback('🟢 UNBAN USER', 'admin_unban')],
+    [Markup.button.callback('👤 CHECK STATUS', 'admin_status')]
+  ]);
+  return ctx.reply('👑 **ADMIN CONTROL PANEL** 👑\n\n**Select an action below:**', keyboard);
+});
+
+// Admin stateful text handling
+bot.on('text', async (ctx, next) => {
+  // Only handle if user is admin and has admin_state set
+  const userId = ctx.from.id;
+  const user = await getUserData(userId);
+  if (!(user.role === 'admin' && user.admin_state)) return next();
+
+  const state = user.admin_state; // e.g., 'add_credit', 'suspend'
+  const inputParts = ctx.message.text.trim().split(/\s+/).filter(Boolean);
+  // reset admin state
+  await usersCollection.updateOne({ _id: userId }, { $set: { admin_state: null } });
+
+  // Handle states
+  if (state === 'add_credit' || state === 'remove_credit') {
+    const targetId = parseInt(inputParts[0], 10);
+    const amount = parseInt(inputParts[1], 10);
+    if (!targetId || isNaN(amount)) return ctx.reply('❌ **INVALID FORMAT.** Please use: `UserID Amount`');
+    const delta = state === 'add_credit' ? amount : -amount;
+    await usersCollection.updateOne({ _id: targetId }, { $inc: { balance: delta } }, { upsert: true });
+    const verb = state === 'add_credit' ? 'ADDED TO' : 'REMOVED FROM';
+    return ctx.reply(`✅ **SUCCESS!** 💰\n\n**${Math.abs(amount)} TK ${verb} USER ${targetId}.**`);
+  } else if (state === 'suspend' || state === 'unban') {
+    const targetId = parseInt(inputParts[0], 10);
+    if (!targetId) return ctx.reply('❌ **INVALID FORMAT.** Please use: `UserID`');
+    const isSuspended = state === 'suspend';
+    await usersCollection.updateOne({ _id: targetId }, { $set: { is_suspended: isSuspended } }, { upsert: true });
+    const statusVerb = isSuspended ? 'SUSPENDED' : 'UNBANNED';
+    return ctx.reply(`✅ **SUCCESS!** 🛑\n\n**USER ${targetId} HAS BEEN ${statusVerb}.**`);
+  } else if (state === 'status') {
+    const targetId = parseInt(inputParts[0], 10);
+    if (!targetId) return ctx.reply('❌ **INVALID FORMAT.** Please use: `UserID`');
+    const target = await usersCollection.findOne({ _id: targetId });
+    return ctx.reply(`👤 **USER STATUS**\n\n${JSON.stringify(target || { _id: targetId, msg: 'No record' }, null, 2)}`);
+  } else {
+    return ctx.reply('⚠️ **UNKNOWN ADMIN STATE.**');
+  }
+});
+
+// Admin action button handler
+bot.action(/admin_(.+)/, adminCheck, async (ctx) => {
+  await ctx.editMessageReplyMarkup({}); // tidy keyboard
+  const action = ctx.match[1]; // e.g., add_credit
+  const userId = ctx.from.id;
+  await usersCollection.updateOne({ _id: userId }, { $set: { admin_state: action } });
+  switch (action) {
+    case 'add_credit':
+      await ctx.reply('👉 **ADD CREDIT MODE**\n\n**FORMAT:** `UserID Amount`\n\nExample: `123456789 50`');
+      break;
+    case 'remove_credit':
+      await ctx.reply('👉 **REMOVE CREDIT MODE**\n\n**FORMAT:** `UserID Amount`\n\nExample: `123456789 20`');
+      break;
+    case 'suspend':
+      await ctx.reply('👉 **SUSPEND USER MODE**\n\n**FORMAT:** `UserID`\n\nExample: `123456789`');
+      break;
+    case 'unban':
+      await ctx.reply('👉 **UNBAN USER MODE**\n\n**FORMAT:** `UserID`\n\nExample: `123456789`');
+      break;
+    case 'status':
+      await ctx.reply('👉 **CHECK STATUS MODE**\n\n**FORMAT:** `UserID`\n\nExample: `123456789`');
+      break;
+    default:
+      await ctx.reply('⚠️ **UNKNOWN ACTION.**');
+  }
+  await ctx.answerCbQuery();
+});
+
+// --- Vercel / Netlify / Serverless Webhook handler export ---
+module.exports = async (req, res) => {
+  try {
+    await connectDB();
+    if (req.method === 'POST') {
+      // Expect Telegram update body
+      await bot.handleUpdate(req.body);
+      return res.status(200).send('OK');
+    } else {
+      // Info for GET
+      return res.status(200).send('OSINT Bot is running via Webhook.');
+    }
+  } catch (err) {
+    console.error('Webhook or DB Error:', err.message);
+    return res.status(500).send(`Internal Server Error: ${err.message}`);
+  }
+};
+
+// If you run locally with polling (development), uncomment below
+// (Use env var BOT_POLLING=1 to enable local polling)
+/*
+if (process.env.BOT_POLLING === '1') {
+  (async () => {
+    await connectDB();
+    bot.launch();
+    console.log('Bot started with polling');
+    process.on('SIGINT', () => bot.stop('SIGINT'));
+    process.on('SIGTERM', () => bot.stop('SIGTERM'));
+  })();
+}
+*/
