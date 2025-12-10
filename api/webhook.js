@@ -22,7 +22,9 @@ const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
 const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
 
 const API_CONFIG = {
+  // Original key kept
   NAME_FINDER: process.env.APISUITE_NAMEFINDER || 'https://m.apisuite.in/?api=namefinder&api_key=2907591571c0d74b89dc1244a1bb1715&number=',
+  // API key and URL structure updated as per user request
   AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://m.apisuite.in/?api=number-to-aadhaar&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number='
 };
 
@@ -47,7 +49,7 @@ async function connectDB() {
   logsCollection = db.collection(LOGS_COL);
   blockedCollection = db.collection(BLOCKED_COL);
 
-  // FIX 2: Removed 'unique: true' from _id index creation (it's redundant and can cause the error)
+  // Fix: Removed 'unique: true' from _id index creation (it's redundant and can cause the error)
   await usersCollection.createIndex({ _id: 1 });
   await logsCollection.createIndex({ ts: -1 });
   await blockedCollection.createIndex({ number: 1 }, { unique: true });
@@ -294,7 +296,7 @@ async function sendPremiumNumberResult(ctx, apiResultObj, phone, userId) {
     `*🌐 Circle:* ${circle}`,
     '',
     `*🏡 Address:*`,
-    // FIX 1: Ensure addressRaw is escaped if addressPretty is empty
+    // Fix: Ensure addressRaw is escaped if addressPretty is empty (addresses the "Character '!' issue)
     `${addressPretty || escapeMdV2(String(addressRaw || 'N/A'))}`,
     '',
     `*📮 Pincode:* ${escapeMdV2(String(pincode || 'N/A'))}`,
