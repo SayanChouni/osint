@@ -1,6 +1,6 @@
 // FILE: index.js
-// Clean, production-friendly single-file bot for "INFORA-PRO"
-// Minimal comments: only the 'why' where necessary.
+// INFORA-PRO - single-file bot (styled HTML results for /num)
+// Notes: /num returns a styled HTML message (copyable). Admin logs still use files.
 
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
@@ -24,7 +24,7 @@ const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
 // Anti-spam cooldown in milliseconds
 const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
 
-// API endpoints (ONLY two used: apisuite namefinder & aadhaar)
+// APIs used (only these two)
 const API_CONFIG = {
   NAME_FINDER: process.env.APISUITE_NAMEFINDER || 'https://m.apisuite.in/?api=namefinder&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number=',
   AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://m.apisuite.in/?api=number-to-aadhaar&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number='
@@ -51,7 +51,7 @@ async function connectDB() {
   logsCollection = db.collection(LOGS_COL);
   blockedCollection = db.collection(BLOCKED_COL);
 
-  // Indexes for performance
+  // Indexes
   await usersCollection.createIndex({ _id: 1 }, { unique: true });
   await logsCollection.createIndex({ ts: -1 });
   await blockedCollection.createIndex({ number: 1 }, { unique: true });
@@ -122,7 +122,7 @@ async function logSearch(entry) {
   await logsCollection.insertOne(Object.assign({ ts: new Date() }, entry));
 }
 
-// Always send documents with disable_web_page_preview to avoid mobile "browser" issue
+// ADMIN helper: send logs as file (keeps original sendTextReport)
 async function sendTextReport(ctx, filename, content, caption) {
   const buffer = Buffer.from(typeof content === 'string' ? content : JSON.stringify(content, null, 2), 'utf8');
   try {
@@ -136,6 +136,15 @@ async function sendTextReport(ctx, filename, content, caption) {
   }
 }
 
+// Escape HTML characters for HTML parse mode
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 // ----------------- MIDDLEWARE -----------------
 bot.use(async (ctx, next) => {
   const text = ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
@@ -145,11 +154,11 @@ bot.use(async (ctx, next) => {
 
   const chatType = ctx.chat && ctx.chat.type ? ctx.chat.type : 'private';
   if (isCommand && chatType !== 'private') {
-    return ctx.reply('⚠️ **PLEASE USE THIS BOT IN PRIVATE CHAT.** ⚠️', { parse_mode: 'Markdown' });
+    return ctx.reply('⚠️ <b>PLEASE USE THIS BOT IN PRIVATE CHAT.</b> ⚠️', { parse_mode: 'HTML' });
   }
 
   if (MAINTENANCE_MODE && ctx.from.id !== ADMIN_USER_ID) {
-    return ctx.reply('🛠️ **MAINTENANCE MODE!**\n\n**The bot is under maintenance.**', { parse_mode: 'Markdown' });
+    return ctx.reply('🛠️ <b>MAINTENANCE MODE!</b>\n\nThe bot is under maintenance.', { parse_mode: 'HTML' });
   }
 
   if (isCommand) {
@@ -161,7 +170,7 @@ bot.use(async (ctx, next) => {
     }
 
     if (user.is_suspended) {
-      return ctx.reply('⚠️ **ACCOUNT SUSPENDED!** 🚫\n\n**CONTACT ADMIN.**', { parse_mode: 'Markdown' });
+      return ctx.reply('⚠️ <b>ACCOUNT SUSPENDED!</b> 🚫\n\nCONTACT ADMIN.', { parse_mode: 'HTML' });
     }
 
     // membership check
@@ -170,7 +179,7 @@ bot.use(async (ctx, next) => {
       const keyboard = Markup.inlineKeyboard([
         [Markup.button.url('🔒 JOIN MANDATORY GROUP', GROUP_JOIN_LINK)]
       ]);
-      return ctx.reply('⛔️ **ACCESS REQUIRED!** ⛔️\n\n**YOU MUST JOIN THE GROUP TO USE THE BOT.**', keyboard);
+      return ctx.reply('⛔️ <b>ACCESS REQUIRED!</b> ⛔️\n\n<b>YOU MUST JOIN THE GROUP TO USE THE BOT.</b>', keyboard);
     }
 
     // credits/trial - skip for admin and info-only commands
@@ -179,12 +188,12 @@ bot.use(async (ctx, next) => {
       const hasBalance = user.balance >= COST_PER_SEARCH;
       if (!isFree && !hasBalance) {
         const msg = `
-⚠️ **INSUFFICIENT BALANCE!**
+⚠️ <b>INSUFFICIENT BALANCE!</b>
 
-**YOU HAVE USED YOUR ${FREE_TRIAL_LIMIT} FREE SEARCH.**
-**RECHARGE MINIMUM ₹25 TO CONTINUE.**
+<b>YOU HAVE USED YOUR ${FREE_TRIAL_LIMIT} FREE SEARCH.</b>
+<b>RECHARGE MINIMUM ₹25 TO CONTINUE.</b>
 CONTACT: @zecboy`;
-        return ctx.reply(msg, { parse_mode: 'Markdown' });
+        return ctx.reply(msg, { parse_mode: 'HTML' });
       }
 
       // increment search_count and deduct if not free
@@ -193,7 +202,7 @@ CONTACT: @zecboy`;
       await usersCollection.updateOne({ _id: ctx.from.id }, updateOps);
       const updated = await usersCollection.findOne({ _id: ctx.from.id });
       const freeLeft = Math.max(0, FREE_TRIAL_LIMIT - updated.search_count);
-      await ctx.reply(`💳 Transaction processed. COST: ${isFree ? '0' : COST_PER_SEARCH} TK. BALANCE: ${updated.balance} TK. FREE LEFT: ${freeLeft}.`, { parse_mode: 'Markdown' });
+      await ctx.reply(`💳 <b>Transaction processed.</b> COST: ${isFree ? '0' : COST_PER_SEARCH} TK. BALANCE: ${updated.balance} TK. FREE LEFT: ${freeLeft}.`, { parse_mode: 'HTML' });
     }
   }
 
@@ -210,13 +219,13 @@ bot.start(async (ctx) => {
 • PER searches cost ${COST_PER_SEARCH} credit 💳
 • Works in BOT only for privacy 👥🔐
 
-— — — — — — — — — — — — — — — — — — —
+━━━━━━━━━━━━━━━━━━━━
 🔎 Basic Lookups
 • /num <phone> — 10-digit mobile details
 • IF YOU WANT TO SEARCH , VECHIL INFO , AREA PIN CODE INFO ,
   TELEGRAM USERNAME TO NUMBER INFO SO DM : @zecboy
 
-— — — — — — — — — — — — — — — — — — —
+━━━━━━━━━━━━━━━━━━━━
 ⚡️ Powered by: @zecboy
 🌐 Stay Safe • Respect Privacy • Use Responsibly 🚀
 `;
@@ -227,7 +236,7 @@ bot.start(async (ctx) => {
   ]);
 
   if (member) {
-    return ctx.reply(startText, { parse_mode: 'Markdown', ...{} });
+    return ctx.reply(startText, { parse_mode: 'HTML' });
   } else {
     const joinKeyboard = Markup.inlineKeyboard([
       [Markup.button.url('🔒 JOIN MANDATORY GROUP', GROUP_JOIN_LINK)],
@@ -247,12 +256,46 @@ bot.action('try_num', (ctx) => {
 bot.command('balance', async (ctx) => {
   const user = await getUserData(ctx.from.id);
   const freeLeft = Math.max(0, FREE_TRIAL_LIMIT - user.search_count);
-  return ctx.reply(`💰 BALANCE: ${user.balance} TK\nFREE USES LEFT: ${freeLeft}`, { parse_mode: 'Markdown' });
+  return ctx.reply(`💰 BALANCE: ${user.balance} TK\nFREE USES LEFT: ${freeLeft}`, { parse_mode: 'HTML' });
 });
 
 bot.command(['donate', 'support', 'buyapi'], (ctx) => {
-  return ctx.reply('✨ SUPPORT: DM @zecboy', { parse_mode: 'Markdown' });
+  return ctx.reply('✨ SUPPORT: DM @zecboy', { parse_mode: 'HTML' });
 });
+
+// ----------------- STYLED SEARCH REPORT (Style A - Thick Lines) -----------------
+// This sends a beautiful HTML message (copyable). Values are escaped.
+async function sendStyledReportHTML(ctx, phone, resultObj, userId) {
+  const now = new Date();
+  const ts = now.toLocaleString('en-GB', { hour12: true }); // e.g., 09/12/2025, 10:42 PM (locale formatting)
+  // Extract likely fields from resultObj safely
+  const nameVal = escapeHtml(resultObj.NAME_FINDER_INFO && typeof resultObj.NAME_FINDER_INFO === 'object' ? (resultObj.NAME_FINDER_INFO.name || resultObj.NAME_FINDER_INFO.full_name || JSON.stringify(resultObj.NAME_FINDER_INFO)) : (resultObj.NAME_FINDER_INFO || 'N/A'));
+  const aadhaarVal = escapeHtml(resultObj.AADHAAR_INFO && typeof resultObj.AADHAAR_INFO === 'object' ? JSON.stringify(resultObj.AADHAAR_INFO) : (resultObj.AADHAAR_INFO || 'N/A'));
+
+  // You can expand below to parse more elements if apis return structured data
+  const html = `
+📱 <b>𝗠𝗼𝗯𝗶𝗹𝗲 𝗜𝗻𝗳𝗼 𝗙𝗼𝘂𝗻𝗱!</b>
+━━━━━━━━━━━━━━━━━━━━
+<b>👤 Name:</b> ${nameVal}
+<b>📞 Phone:</b> ${escapeHtml(phone)}
+<b>📡 Raw Aadhar Info:</b> ${aadhaarVal}
+
+<b>🕒 Queried On:</b> ${escapeHtml(ts)}
+<b>👤 Searched By:</b> ${escapeHtml(userId)}
+
+━━━━━━━━━━━━━━━━━━━━
+<b>⚠️ Use this information responsibly.</b>
+`;
+
+  // Send as HTML message (copyable)
+  try {
+    await ctx.reply(html, { parse_mode: 'HTML', disable_web_page_preview: true });
+  } catch (err) {
+    console.error('sendStyledReportHTML error:', err.message);
+    // Fallback: send plain text
+    await ctx.reply(`Mobile Info Found!\nName: ${nameVal}\nPhone: ${phone}\n\n(Unable to send styled message)`);
+  }
+}
 
 // ----------------- /num COMMAND (ONLY COMMAND) -----------------
 bot.command('num', async (ctx) => {
@@ -272,14 +315,14 @@ bot.command('num', async (ctx) => {
 
   // Blocked number check
   if (await isBlockedNumber(phone)) {
-    await logSearch({ user_id: ctx.from.id, phone, blocked: true, method: 'blocked_check', ip: null });
+    await logSearch({ user_id: ctx.from.id, phone, blocked: true, method: 'blocked_check' });
     return ctx.reply('🚫 This number is blocked from searches.');
   }
 
   // Update last_search_ts
   await usersCollection.updateOne({ _id: ctx.from.id }, { $set: { last_search_ts: now } });
 
-  await ctx.reply(`🔎 Searching for: \`${phone}\``, { parse_mode: 'Markdown' });
+  await ctx.reply(`🔎 Searching for: <b>${escapeHtml(phone)}</b>`, { parse_mode: 'HTML' });
 
   // Call the two apis in parallel (apisuite namefinder + aadhaar)
   try {
@@ -293,15 +336,14 @@ bot.command('num', async (ctx) => {
 
     const result = {
       PHONE_NUMBER: phone,
-      NAME_FINDER: nameRes.status === 'fulfilled' ? nameRes.value.data : { error: nameRes.reason ? nameRes.reason.message : 'failed' },
+      NAME_FINDER_INFO: nameRes.status === 'fulfilled' ? nameRes.value.data : { error: nameRes.reason ? nameRes.reason.message : 'failed' },
       AADHAAR_INFO: aadhaarRes.status === 'fulfilled' ? aadhaarRes.value.data : { error: aadhaarRes.reason ? aadhaarRes.reason.message : 'failed' }
     };
 
-    const filename = `num_report_${phone}.txt`;
-    const txt = `--- INFORA PRO REPORT ---\nPhone: ${phone}\n\n${JSON.stringify(result, null, 2)}`;
+    // Send styled HTML message (copyable)
+    await sendStyledReportHTML(ctx, phone, result, ctx.from.id);
 
-    // send and log
-    await sendTextReport(ctx, filename, txt, '✅ Report generated for phone number.');
+    // Log the search
     await logSearch({
       user_id: ctx.from.id,
       phone,
