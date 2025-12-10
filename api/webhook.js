@@ -47,7 +47,8 @@ async function connectDB() {
   logsCollection = db.collection(LOGS_COL);
   blockedCollection = db.collection(BLOCKED_COL);
 
-  await usersCollection.createIndex({ _id: 1 }, { unique: true });
+  // FIX 2: Removed 'unique: true' from _id index creation (it's redundant and can cause the error)
+  await usersCollection.createIndex({ _id: 1 });
   await logsCollection.createIndex({ ts: -1 });
   await blockedCollection.createIndex({ number: 1 }, { unique: true });
 }
@@ -172,11 +173,11 @@ bot.use(async (ctx, next) => {
 
   const chatType = ctx.chat && ctx.chat.type ? ctx.chat.type : 'private';
   if (isCmd && chatType !== 'private') {
-    return ctx.reply('⚠️ *PLEASE USE THIS BOT IN PRIVATE CHAT.* ⚠️', { parse_mode: 'MarkdownV2' });
+    return ctx.reply('⚠️ *PLEASE USE THIS BOT IN PRIVATE CHAT\\.* ⚠️', { parse_mode: 'MarkdownV2' });
   }
 
   if (MAINTENANCE_MODE && ctx.from.id !== ADMIN_USER_ID) {
-    return ctx.reply('🛠️ *MAINTENANCE MODE* — Bot temporarily unavailable.', { parse_mode: 'MarkdownV2' });
+    return ctx.reply('🛠️ *MAINTENANCE MODE* — Bot temporarily unavailable\\.', { parse_mode: 'MarkdownV2' });
   }
 
   if (isCmd) {
@@ -187,14 +188,14 @@ bot.use(async (ctx, next) => {
     }
 
     if (user.is_suspended) {
-      return ctx.reply('⚠️ *ACCOUNT SUSPENDED!* 🚫', { parse_mode: 'MarkdownV2' });
+      return ctx.reply('⚠️ *ACCOUNT SUSPENDED\\!* 🚫', { parse_mode: 'MarkdownV2' });
     }
 
     // membership
     const member = await checkMembership(ctx);
     if (!member) {
       const keyboard = Markup.inlineKeyboard([[Markup.button.url('🔒 JOIN MANDATORY GROUP', GROUP_JOIN_LINK)]]);
-      return ctx.reply('⛔️ *ACCESS REQUIRED!* You must join the group.', keyboard);
+      return ctx.reply('⛔️ *ACCESS REQUIRED\\!* You must join the group\\.', keyboard);
     }
 
     // credits/trial
@@ -202,7 +203,7 @@ bot.use(async (ctx, next) => {
       const isFree = user.search_count < FREE_TRIAL_LIMIT;
       const hasBalance = user.balance >= COST_PER_SEARCH;
       if (!isFree && !hasBalance) {
-        const msg = `⚠️ *INSUFFICIENT BALANCE!*\n\n*You used your ${FREE_TRIAL_LIMIT} free search.*\nRecharge to continue. Contact: @zecboy`;
+        const msg = `⚠️ *INSUFFICIENT BALANCE\\!*\n\n*You used your ${FREE_TRIAL_LIMIT} free search\\.*\nRecharge to continue\\. Contact: @zecboy`;
         return ctx.reply(msg, { parse_mode: 'MarkdownV2' });
       }
 
@@ -212,7 +213,7 @@ bot.use(async (ctx, next) => {
       await usersCollection.updateOne({ _id: ctx.from.id }, updateOps);
       const updated = await usersCollection.findOne({ _id: ctx.from.id });
       const freeLeft = Math.max(0, FREE_TRIAL_LIMIT - updated.search_count);
-      await ctx.reply(`💳 *Transaction processed.* COST: ${isFree ? '0' : COST_PER_SEARCH} TK. BALANCE: ${escapeMdV2(String(updated.balance))} TK. FREE LEFT: ${freeLeft}.`, { parse_mode: 'MarkdownV2' });
+      await ctx.reply(`💳 *Transaction processed\\.* COST: ${isFree ? '0' : COST_PER_SEARCH} TK\\. BALANCE: ${escapeMdV2(String(updated.balance))} TK\\. FREE LEFT: ${freeLeft}\\.`, { parse_mode: 'MarkdownV2' });
     }
   }
 
@@ -249,7 +250,7 @@ bot.start(async (ctx) => {
     return ctx.reply(startMd, { parse_mode: 'MarkdownV2', disable_web_page_preview: true, ...{} });
   } else {
     const joinKb = Markup.inlineKeyboard([[Markup.button.url('🔒 JOIN MANDATORY GROUP', GROUP_JOIN_LINK)], [Markup.button.callback('🔎 Try /num', 'try_num')] ]);
-    return ctx.reply('👋 *WELCOME TO OSINT BOT!* You MUST JOIN THE GROUP to use commands.', joinKb);
+    return ctx.reply('👋 *WELCOME TO OSINT BOT\\!* You MUST JOIN THE GROUP to use commands\\.', joinKb);
   }
 });
 
@@ -293,6 +294,7 @@ async function sendPremiumNumberResult(ctx, apiResultObj, phone, userId) {
     `*🌐 Circle:* ${circle}`,
     '',
     `*🏡 Address:*`,
+    // FIX 1: Ensure addressRaw is escaped if addressPretty is empty
     `${addressPretty || escapeMdV2(String(addressRaw || 'N/A'))}`,
     '',
     `*📮 Pincode:* ${escapeMdV2(String(pincode || 'N/A'))}`,
@@ -302,7 +304,7 @@ async function sendPremiumNumberResult(ctx, apiResultObj, phone, userId) {
     `*👤 Searched By:* ${escapeMdV2(String(userId))}`,
     '',
     '━━━━━━━━━━━━━━━━━━━━',
-    '*⚠️ Use this information responsibly.*'
+    '*⚠️ Use this information responsibly\\.*'
   ];
 
   const out = mdLines.join('\n');
@@ -319,7 +321,7 @@ async function sendPremiumNumberResult(ctx, apiResultObj, phone, userId) {
 bot.command('num', async (ctx) => {
   const parts = ctx.message.text.split(/\s+/).filter(Boolean);
   const phone = parts[1];
-  if (!phone) return ctx.reply('👉 INPUT MISSING! Use: /num <phone>');
+  if (!phone) return ctx.reply('👉 INPUT MISSING\\! Use: /num <phone>');
 
   await connectDB();
   const user = await getUserData(ctx.from.id);
@@ -328,13 +330,13 @@ bot.command('num', async (ctx) => {
   const now = Date.now();
   const last = user.last_search_ts || 0;
   if (now - last < SEARCH_COOLDOWN_MS && ctx.from.id !== ADMIN_USER_ID) {
-    return ctx.reply(`⏱️ Please wait ${Math.ceil((SEARCH_COOLDOWN_MS - (now - last))/1000)}s before next search.`, { parse_mode: 'MarkdownV2' });
+    return ctx.reply(`⏱️ Please wait ${Math.ceil((SEARCH_COOLDOWN_MS - (now - last))/1000)}s before next search\\.`, { parse_mode: 'MarkdownV2' });
   }
 
   // block check
   if (await isBlockedNumber(phone)) {
     await logSearch({ user_id: ctx.from.id, phone, blocked: true, method: 'blocked_check' });
-    return ctx.reply('🚫 This number is blocked from searches.', { parse_mode: 'MarkdownV2' });
+    return ctx.reply('🚫 This number is blocked from searches\\.', { parse_mode: 'MarkdownV2' });
   }
 
   // update last_search_ts
@@ -392,13 +394,13 @@ bot.command('num', async (ctx) => {
 
   } catch (err) {
     console.error('num command error:', err.message);
-    return ctx.reply('❌ API error. Please try again later.', { parse_mode: 'MarkdownV2' });
+    return ctx.reply('❌ API error\\. Please try again later\\.', { parse_mode: 'MarkdownV2' });
   }
 });
 
 // ---------------- ADMIN PANEL ----------------
 const adminOnly = (ctx, next) => {
-  if (ctx.from.id !== ADMIN_USER_ID) return ctx.reply('❌ ADMIN ACCESS DENIED.', { parse_mode: 'MarkdownV2' });
+  if (ctx.from.id !== ADMIN_USER_ID) return ctx.reply('❌ ADMIN ACCESS DENIED\\.', { parse_mode: 'MarkdownV2' });
   return next();
 };
 
@@ -442,35 +444,36 @@ bot.on('text', async (ctx, next) => {
 
   try {
     if (state === 'add_credit' || state === 'remove_credit') {
-      if (parts.length !== 2) return ctx.reply('INVALID FORMAT. Use: UserID Amount', { parse_mode: 'MarkdownV2' });
+      if (parts.length !== 2) return ctx.reply('INVALID FORMAT\\. Use: UserID Amount', { parse_mode: 'MarkdownV2' });
       const targetId = parseInt(parts[0], 10);
       const amount = parseInt(parts[1], 10);
-      if (!targetId || isNaN(amount)) return ctx.reply('INVALID FORMAT. Use: UserID Amount', { parse_mode: 'MarkdownV2' });
+      if (!targetId || isNaN(amount)) return ctx.reply('INVALID FORMAT\\. Use: UserID Amount', { parse_mode: 'MarkdownV2' });
       const delta = state === 'add_credit' ? amount : -amount;
       await usersCollection.updateOne({ _id: targetId }, { $inc: { balance: delta } }, { upsert: true });
       await ctx.reply(`SUCCESS: ${Math.abs(amount)} TK ${state === 'add_credit' ? 'ADDED TO' : 'REMOVED FROM'} USER ${targetId}`, { parse_mode: 'MarkdownV2' });
     } else if (state === 'suspend' || state === 'unban') {
-      if (parts.length !== 1) return ctx.reply('INVALID FORMAT. Use: UserID', { parse_mode: 'MarkdownV2' });
+      if (parts.length !== 1) return ctx.reply('INVALID FORMAT\\. Use: UserID', { parse_mode: 'MarkdownV2' });
       const targetId = parseInt(parts[0], 10);
-      if (!targetId) return ctx.reply('INVALID FORMAT. Use: UserID', { parse_mode: 'MarkdownV2' });
+      if (!targetId) return ctx.reply('INVALID FORMAT\\. Use: UserID', { parse_mode: 'MarkdownV2' });
       await usersCollection.updateOne({ _id: targetId }, { $set: { is_suspended: state === 'suspend' } }, { upsert: true });
       await ctx.reply(`SUCCESS: USER ${targetId} ${state === 'suspend' ? 'SUSPENDED' : 'UNBANNED'}`, { parse_mode: 'MarkdownV2' });
     } else if (state === 'status') {
-      if (parts.length !== 1) return ctx.reply('INVALID FORMAT. Use: UserID', { parse_mode: 'MarkdownV2' });
+      if (parts.length !== 1) return ctx.reply('INVALID FORMAT\\. Use: UserID', { parse_mode: 'MarkdownV2' });
       const targetId = parseInt(parts[0], 10);
       const t = await usersCollection.findOne({ _id: targetId });
-      return ctx.reply(`USER STATUS:\n\`\`\`\n${JSON.stringify(t || { _id: targetId, msg: 'No record' }, null, 2)}\n\`\`\``, { parse_mode: 'MarkdownV2' });
+      // Using MarkdownV2 code block for status
+      return ctx.reply(`USER STATUS:\n\`\`\`json\n${JSON.stringify(t || { _id: targetId, msg: 'No record' }, null, 2)}\n\`\`\``, { parse_mode: 'MarkdownV2' });
     } else if (state === 'view_logs') {
       const n = parts.length === 1 ? Math.min(100, parseInt(parts[0], 10) || 10) : 10;
       const logs = await logsCollection.find().sort({ ts: -1 }).limit(n).toArray();
       return sendAdminFile(ctx, `logs_last_${n}.txt`, logs, `Last ${n} logs`);
     } else if (state === 'add_block') {
-      if (parts.length !== 1) return ctx.reply('INVALID FORMAT. Use: phone', { parse_mode: 'MarkdownV2' });
+      if (parts.length !== 1) return ctx.reply('INVALID FORMAT\\. Use: phone', { parse_mode: 'MarkdownV2' });
       const phone = parts[0];
       const ok = await addBlockedNumber(phone, ctx.from.id);
       return ctx.reply(ok ? `Blocked ${escapeMdV2(phone)}` : `Failed to block ${escapeMdV2(phone)}`, { parse_mode: 'MarkdownV2' });
     } else if (state === 'remove_block') {
-      if (parts.length !== 1) return ctx.reply('INVALID FORMAT. Use: phone', { parse_mode: 'MarkdownV2' });
+      if (parts.length !== 1) return ctx.reply('INVALID FORMAT\\. Use: phone', { parse_mode: 'MarkdownV2' });
       const phone = parts[0];
       const ok = await removeBlockedNumber(phone);
       return ctx.reply(ok ? `Unblocked ${escapeMdV2(phone)}` : `Failed to unblock ${escapeMdV2(phone)}`, { parse_mode: 'MarkdownV2' });
@@ -498,6 +501,7 @@ module.exports = async (req, res) => {
     }
   } catch (err) {
     console.error('Webhook handler error:', err.message);
+    // Ensure the message sent in the response is a simple string for safety
     return res.status(500).send(`Internal Server Error: ${err.message}`);
   }
 };
