@@ -336,7 +336,8 @@ bot.action('free_access_link', async (ctx) => {
 
         // Make the GET request
         const url = `${FREE_ACCESS_API_BASE_URL}?${params.toString()}`;
-        const res = await axios.get(url, { timeout: 10000 });
+        // INCREASED TIMEOUT FROM 10000ms TO 20000ms (20 seconds) to prevent timeout error
+        const res = await axios.get(url, { timeout: 20000 }); 
         
         // Check for the expected JSON response structure
         if (res.data && res.data.status === 'success' && res.data.shortenedUrl) {
@@ -350,17 +351,22 @@ bot.action('free_access_link', async (ctx) => {
 
             await ctx.reply(message, { parse_mode: 'MarkdownV2', reply_markup: keyboard.reply_markup, disable_web_page_preview: true });
         } else if (res.data && res.data.status === 'error') {
-             // FIX: The error message itself might contain unescaped Markdown. 
-             // We ensure we escape the whole message and wrap it carefully.
+             // FIX: Escaping error message from API response
              const errorMessage = escapeMdV2(res.data.message || 'API error message is missing.');
              await ctx.reply(`❌ Link API Error: ${errorMessage}\\. Try again or use *Add Payment*\\\\.`, { parse_mode: 'MarkdownV2' });
         } else {
              await ctx.reply('❌ Failed to generate free access link \\(Unknown response\\)\\. Please try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
         }
     } catch (err) {
+        // Log the actual error
         console.error('Free access API error:', err.message);
-        // FIX: The error message here is likely from Axios/Node. We send a clean, already-escaped string.
-        await ctx.reply('❌ API Error during link generation\\. Try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
+        
+        // User-facing message: specifically mention timeout if applicable, otherwise general error.
+        const userMsg = err.code === 'ECONNABORTED' || err.message.includes('timeout') 
+                        ? '❌ Timeout\\. The link generator is slow\\. Please try again in 30 seconds or use *Add Payment*\\.'
+                        : '❌ API Error during link generation\\. Try again or use *Add Payment*\\.';
+
+        await ctx.reply(userMsg, { parse_mode: 'MarkdownV2' });
     }
 });
 
