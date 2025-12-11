@@ -226,7 +226,7 @@ bot.use(async (ctx, next) => {
         
         const rechargeKb = Markup.inlineKeyboard([
              [Markup.button.url('💳 ADD PAYMENT', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)],
-             // Changed back to callback button to trigger dynamic link generation
+             // Use callback button to trigger API call
              [Markup.button.callback('🆓 GET FREE ACCESS (5 Searches)', 'free_access_link')] 
         ]);
         
@@ -372,12 +372,11 @@ bot.action('free_access_link', async (ctx) => {
         const userMsg = '❌ API Error during link generation. Please try again or use Add Payment.';
 
         if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
-             // Sending timeout message in Plain Text
-             await ctx.reply('❌ Timeout. The link generator is slow. Please try again in 30 seconds or use Add Payment.');
+             // Sending timeout message in Plain Text (explicitly removing parse_mode)
+             await ctx.reply('❌ Timeout. The link generator is slow. Please try again in 30 seconds or use Add Payment.', { parse_mode: undefined });
         } else {
-             // Sending general error in Plain Text (REMOVED parse_mode: 'MarkdownV2')
-             // This is the CRITICAL FIX for the 400 Bad Request error
-             await ctx.reply(userMsg); 
+             // Sending general error in Plain Text (explicitly removing parse_mode)
+             await ctx.reply(userMsg, { parse_mode: undefined }); 
         }
     }
 });
