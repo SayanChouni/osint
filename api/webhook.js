@@ -350,12 +350,16 @@ bot.action('free_access_link', async (ctx) => {
 
             await ctx.reply(message, { parse_mode: 'MarkdownV2', reply_markup: keyboard.reply_markup, disable_web_page_preview: true });
         } else if (res.data && res.data.status === 'error') {
-             await ctx.reply(`❌ Link API Error: ${escapeMdV2(res.data.message)}\\. Try again or use *Add Payment*\\\\.`, { parse_mode: 'MarkdownV2' });
+             // FIX: The error message itself might contain unescaped Markdown. 
+             // We ensure we escape the whole message and wrap it carefully.
+             const errorMessage = escapeMdV2(res.data.message || 'API error message is missing.');
+             await ctx.reply(`❌ Link API Error: ${errorMessage}\\. Try again or use *Add Payment*\\\\.`, { parse_mode: 'MarkdownV2' });
         } else {
              await ctx.reply('❌ Failed to generate free access link \\(Unknown response\\)\\. Please try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
         }
     } catch (err) {
         console.error('Free access API error:', err.message);
+        // FIX: The error message here is likely from Axios/Node. We send a clean, already-escaped string.
         await ctx.reply('❌ API Error during link generation\\. Try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
     }
 });
