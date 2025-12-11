@@ -4,7 +4,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
-const { URLSearchParams } = require('url'); // Added back for API call
+const { URLSearchParams } = require('url');
 
 // ---------------- CONFIG ----------------
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -13,70 +13,78 @@ const DB_NAME = process.env.DB_NAME || 'osint_user_db';
 const USERS_COL = process.env.COLLECTION_NAME || 'users';
 const LOGS_COL = process.env.LOGS_COLLECTION || 'search_logs';
 const BLOCKED_COL = process.env.BLOCKED_COLLECTION || 'blocked_numbers';
-const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID, 10) : null;
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID
+  ? parseInt(process.env.ADMIN_USER_ID, 10)
+  : null;
 
-const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531';
-const GROUP_JOIN_LINK = process.env.GROUP_JOIN_LINK || 'https://t.me/+3TSyKHmwOvRmNDJl';
+const MANDATORY_CHANNEL_ID =
+  process.env.MANDATORY_CHANNEL_ID || '-1002516081531';
+const GROUP_JOIN_LINK =
+  process.env.GROUP_JOIN_LINK || 'https://t.me/+3TSyKHmwOvRmNDJl';
 
-// --- CUSTOM LIMITS ---
 const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '2', 10);
-const BONUS_TRIAL_LIMIT = 5; // New limit for "Get Free Access"
+const BONUS_TRIAL_LIMIT = 5;
 const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
-const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
+const SEARCH_COOLDOWN_MS = parseInt(
+  process.env.SEARCH_COOLDOWN_MS || '2000',
+  10
+);
 
-// --- FREE ACCESS API CONFIG ---
-const FREE_ACCESS_API_TOKEN = '9c06662a8be6f2fc0aff86f302586f967fe917bb';
+// FREE ACCESS API
+const FREE_ACCESS_API_TOKEN = '9c06662a8be6f2fc0aff86f302586f917bb';
 const FREE_ACCESS_API_BASE_URL = 'https://vplink.in/api';
 const PAYMENT_CONTACT = '@zecboy';
 
 const API_CONFIG = {
-  // NAME_FINDER configuration is still here, but we won't call it in /num
-  NAME_FINDER: process.env.APISUITE_NAMEFINDER || 'https://m.apisuite.in/?api=namefinder&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number=',
-  // AADHAAR_FINDER API URL changed as requested
-  AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://nixonsmmapi.s77134867.workers.dev/?mobile='
+  AADHAAR_FINDER:
+    process.env.APISUITE_AADHAAR ||
+    'https://nixonsmmapi.s77134867.workers.dev/?mobile=',
 };
 
-let MAINTENANCE_MODE = (process.env.MAINTENANCE_MODE === '1');
+let MAINTENANCE_MODE = process.env.MAINTENANCE_MODE === '1';
 
 // ---------------- MONGO SETUP ----------------
 if (!MONGODB_URI) {
-  console.error('MONGODB_URI required');
+  console.error('MONGODB_URI missing');
   process.exit(1);
 }
+
 const mongoClient = new MongoClient(MONGODB_URI, {
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
-  maxPoolSize: 1
+  maxPoolSize: 1,
 });
+
 let db, usersCollection, logsCollection, blockedCollection;
+
 async function connectDB() {
-  if (usersCollection && logsCollection && blockedCollection) return;
+  if (usersCollection) return;
+
   await mongoClient.connect();
   db = mongoClient.db(DB_NAME);
+
   usersCollection = db.collection(USERS_COL);
   logsCollection = db.collection(LOGS_COL);
   blockedCollection = db.collection(BLOCKED_COL);
 
-  // Fix: Removed 'unique: true' from _id index creation
   await usersCollection.createIndex({ _id: 1 });
-  await logsCollection.createIndex({ ts: -1 });
+
   await blockedCollection.createIndex({ number: 1 }, { unique: true });
 }
 
-// ---------------- BOT SETUP ----------------
+// ---------------- BOT ----------------
 if (!BOT_TOKEN) {
-  console.error('BOT_TOKEN required');
+  console.error('BOT_TOKEN missing');
   process.exit(1);
 }
+
 const bot = new Telegraf(BOT_TOKEN);
 
-// ---------------- HELPERS ----------------
-// Create a MarkdownV2-safe escape for user-provided strings
+// MarkdownV2 escape
 function escapeMdV2(text) {
-  if (text === null || text === undefined) return '';
-  const s = String(text);
-  // escape backslash first
-  return s.replace(/\\/g, '\\\\')
+  if (!text) return '';
+  return String(text)
+    .replace(/\\/g, '\\\\')
     .replace(/_/g, '\\_')
     .replace(/\*/g, '\\*')
     .replace(/\[/g, '\\[')
@@ -97,77 +105,78 @@ function escapeMdV2(text) {
     .replace(/!/g, '\\!');
 }
 
-// Parse address to extract state and pincode (best-effort)
-function parseAddress(addressRaw) {
-  if (!addressRaw || typeof addressRaw !== 'string') return { state: '', pincode: '', addressPretty: escapeMdV2(String(addressRaw || '')) };
-  // sample: "!Dhajamonipur!Dhajamonipur!Near Atchala!Dighi Dhajamanipur Bankura!Bankura!BANKURA!West Bengal!722121"
-  const parts = addressRaw.split('!').filter(Boolean).map(p => p.trim()).filter(Boolean);
-  const pincodeCandidate = parts.length ? parts[parts.length - 1] : '';
-  const stateCandidate = parts.length >= 2 ? parts[parts.length - 2] : '';
-  const addressPretty = parts.join(', ');
-  return { state: stateCandidate || '', pincode: pincodeCandidate || '', addressPretty: escapeMdV2(addressPretty) };
+// Address parser
+function parseAddress(raw) {
+  if (!raw) return { state: '', pincode: '', addressPretty: '' };
+
+  const parts = raw
+    .split('!')
+    .filter(Boolean)
+    .map((p) => p.trim());
+
+  const pincode = parts[parts.length - 1] || '';
+  const state = parts[parts.length - 2] || '';
+
+  return {
+    state,
+    pincode,
+    addressPretty: escapeMdV2(parts.join(', ')),
+  };
 }
 
-// DB helpers
-async function getUserData(userId) {
+// DB — Get User
+async function getUserData(uid) {
   await connectDB();
-  const user = await usersCollection.findOne({ _id: userId });
-  if (!user) {
-    const newUser = {
-      _id: userId,
+
+  let u = await usersCollection.findOne({ _id: uid });
+
+  if (!u) {
+    u = {
+      _id: uid,
       balance: 0,
       search_count: 0,
+      bonus_search_count: 0,
       is_suspended: false,
-      role: (userId === ADMIN_USER_ID ? 'admin' : 'user'),
-      admin_state: null,
+      role: uid === ADMIN_USER_ID ? 'admin' : 'user',
       last_search_ts: 0,
-      bonus_search_count: 0 // New field for free access searches
+      admin_state: null,
     };
-    await usersCollection.insertOne(newUser);
-    return newUser;
+    await usersCollection.insertOne(u);
   }
-  // Ensure the new field exists if the user is old
-  if (user.bonus_search_count === undefined) {
-     await usersCollection.updateOne({ _id: userId }, { $set: { bonus_search_count: 0 } });
-     user.bonus_search_count = 0;
+
+  if (u.bonus_search_count === undefined) {
+    await usersCollection.updateOne(
+      { _id: uid },
+      { $set: { bonus_search_count: 0 } }
+    );
+    u.bonus_search_count = 0;
   }
-  return user;
+
+  return u;
 }
 
 async function checkMembership(ctx) {
   try {
-    const mem = await ctx.telegram.getChatMember(MANDATORY_CHANNEL_ID, ctx.from.id);
-    return ['member', 'administrator', 'creator'].includes(mem.status);
-  } catch (err) {
-    console.error('membership check failed:', err.message);
+    const m = await ctx.telegram.getChatMember(
+      MANDATORY_CHANNEL_ID,
+      ctx.from.id
+    );
+    return ['member', 'creator', 'administrator'].includes(m.status);
+  } catch (e) {
     return false;
   }
 }
 
-async function isBlockedNumber(number) {
+async function isBlockedNumber(num) {
   await connectDB();
-  const doc = await blockedCollection.findOne({ number });
-  return !!doc;
+  return !!(await blockedCollection.findOne({ number: num }));
 }
-async function addBlockedNumber(number, byUser = null) {
+
+async function logSearch(obj) {
   await connectDB();
-  try {
-    await blockedCollection.updateOne({ number }, { $set: { number, added_by: byUser, ts: new Date() } }, { upsert: true });
-    return true;
-  } catch (err) {
-    console.error('addBlockedNumber error', err.message);
-    return false;
-  }
+  await logsCollection.insertOne({ ...obj, ts: new Date() });
 }
-async function removeBlockedNumber(number) {
-  await connectDB();
-  const r = await blockedCollection.deleteOne({ number });
-  return r.deletedCount > 0;
-}
-async function logSearch(entry) {
-  await connectDB();
-  await logsCollection.insertOne(Object.assign({ ts: new Date() }, entry));
-}
+
 
 // Admin-only file send (keeps doc sending for admin use)
 async function sendAdminFile(ctx, filename, obj, caption) {
