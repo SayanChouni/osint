@@ -25,7 +25,7 @@ const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
 const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
 
 // --- FREE ACCESS API CONFIG ---
-const FREE_ACCESS_API_TOKEN = '9c06662a8be6f2fc0aff86f302586f917bb';
+const FREE_ACCESS_API_TOKEN = '9c06662a8be6f2fc0aff86f302586f967fe917bb';
 const FREE_ACCESS_API_BASE_URL = 'https://vplink.in/api';
 const PAYMENT_CONTACT = '@zecboy';
 
