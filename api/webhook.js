@@ -15,7 +15,11 @@ const BLOCKED_COL = process.env.BLOCKED_COLLECTION || 'blocked_numbers';
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID, 10) : null;
 
 const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531';
+// IMPORTANT: You MUST replace 'infotrac_bot' below with your actual bot's @username
+const BOT_USERNAME = process.env.BOT_USERNAME || 'infotrac_bot'; 
 const GROUP_JOIN_LINK = process.env.GROUP_JOIN_LINK || 'https://t.me/+3TSyKHmwOvRmNDJl';
+// Deep Link Parameter for activation
+const ACTIVATION_START_PARAM = 'activate_free_5'; 
 
 const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '1', 10);
 const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
@@ -23,11 +27,14 @@ const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10
 
 const API_CONFIG = {
   // Keeping the original structure but setting the same API key for consistency
-  // NOTE: You explicitly requested NOT to use this one in search logic, but configuration must exist.
   NAME_FINDER: process.env.APISUITE_NAMEFINDER || 'https://m.apisuite.in/?api=namefinder&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number=',
-  // API key and URL structure updated as per user request
   AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://m.apisuite.in/?api=number-to-aadhaar&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number='
 };
+const VPLINK_BASE_URL = 'https://vplink.in';
+// The URL the external service redirects the user *back* to, with the start parameter
+const CALLBACK_DEEP_LINK = `https://t.me/${BOT_USERNAME}?start=${ACTIVATION_START_PARAM}`;
+// The API URL used to generate the final VPLINK redirect URL
+const VPLINK_API_URL = `https://vplink.in/api?api=9c06662a8be6f2fc0aff86f302586f967fe917bb&url=${encodeURIComponent(CALLBACK_DEEP_LINK)}&alias=inforatrack&format=text`;
 
 let MAINTENANCE_MODE = (process.env.MAINTENANCE_MODE === '1');
 
@@ -50,7 +57,6 @@ async function connectDB() {
   logsCollection = db.collection(LOGS_COL);
   blockedCollection = db.collection(BLOCKED_COL);
 
-  // Fix: Removed 'unique: true' from _id index creation
   await usersCollection.createIndex({ _id: 1 });
   await logsCollection.createIndex({ ts: -1 });
   await blockedCollection.createIndex({ number: 1 }, { unique: true });
@@ -64,11 +70,9 @@ if (!BOT_TOKEN) {
 const bot = new Telegraf(BOT_TOKEN);
 
 // ---------------- HELPERS ----------------
-// Create a MarkdownV2-safe escape for user-provided strings
 function escapeMdV2(text) {
   if (text === null || text === undefined) return '';
   const s = String(text);
-  // escape backslash first
   return s.replace(/\\/g, '\\\\')
     .replace(/_/g, '\\_')
     .replace(/\*/g, '\\*')
@@ -90,10 +94,8 @@ function escapeMdV2(text) {
     .replace(/!/g, '\\!');
 }
 
-// Parse address to extract state and pincode (best-effort)
 function parseAddress(addressRaw) {
   if (!addressRaw || typeof addressRaw !== 'string') return { state: '', pincode: '', addressPretty: escapeMdV2(String(addressRaw || '')) };
-  // sample: "!Dhajamonipur!Dhajamonipur!Near Atchala!Dighi Dhajamanipur Bankura!Bankura!BANKURA!West Bengal!722121"
   const parts = addressRaw.split('!').filter(Boolean).map(p => p.trim()).filter(Boolean);
   const pincodeCandidate = parts.length ? parts[parts.length - 1] : '';
   const stateCandidate = parts.length >= 2 ? parts[parts.length - 2] : '';
@@ -113,10 +115,15 @@ async function getUserData(userId) {
       is_suspended: false,
       role: (userId === ADMIN_USER_ID ? 'admin' : 'user'),
       admin_state: null,
-      last_search_ts: 0
+      last_search_ts: 0,
+      free_access_claimed: false 
     };
     await usersCollection.insertOne(newUser);
     return newUser;
+  }
+  if (user.free_access_claimed === undefined) {
+    user.free_access_claimed = false;
+    await usersCollection.updateOne({ _id: userId }, { $set: { free_access_claimed: false } });
   }
   return user;
 }
@@ -136,27 +143,12 @@ async function isBlockedNumber(number) {
   const doc = await blockedCollection.findOne({ number });
   return !!doc;
 }
-async function addBlockedNumber(number, byUser = null) {
-  await connectDB();
-  try {
-    await blockedCollection.updateOne({ number }, { $set: { number, added_by: byUser, ts: new Date() } }, { upsert: true });
-    return true;
-  } catch (err) {
-    console.error('addBlockedNumber error', err.message);
-    return false;
-  }
-}
-async function removeBlockedNumber(number) {
-  await connectDB();
-  const r = await blockedCollection.deleteOne({ number });
-  return r.deletedCount > 0;
-}
+
 async function logSearch(entry) {
   await connectDB();
   await logsCollection.insertOne(Object.assign({ ts: new Date() }, entry));
 }
 
-// Admin-only file send (keeps doc sending for admin use)
 async function sendAdminFile(ctx, filename, obj, caption) {
   const buffer = Buffer.from(typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2), 'utf8');
   try {
@@ -170,9 +162,10 @@ async function sendAdminFile(ctx, filename, obj, caption) {
 // ---------------- MIDDLEWARE ----------------
 bot.use(async (ctx, next) => {
   const text = ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
-  const isCmd = text && /^\/(num|balance|donate|support|buyapi|admin|status|activate5)\b/.test(text); // Added activate5
+  // Removed activate5 from isCmd check as it's handled via /start
+  const isCmd = text && /^\/(num|balance|donate|support|buyapi|admin|status)\b/.test(text); 
 
-  if (text.startsWith('/start')) return next();
+  if (text.startsWith('/start')) return next(); // Allow /start to pass through for special handling
 
   const chatType = ctx.chat && ctx.chat.type ? ctx.chat.type : 'private';
   if (isCmd && chatType !== 'private') {
@@ -202,16 +195,23 @@ bot.use(async (ctx, next) => {
     }
 
     // credits/trial
-    if (user.role !== 'admin' && !/^\/(balance|donate|support|buyapi|activate5)\b/.test(text)) { // Exclude activate5 from balance check
+    if (user.role !== 'admin' && !/^\/(balance|donate|support|buyapi)\b/.test(text)) { 
       const isFree = user.search_count < FREE_TRIAL_LIMIT;
       const hasBalance = user.balance >= COST_PER_SEARCH;
       if (!isFree && !hasBalance) {
         // --- CUSTOM MODIFICATION: INSUFFICIENT BALANCE BUTTONS ---
-        const msg = `⚠️ *INSUFFICIENT BALANCE\\!*\n\n*You used your ${FREE_TRIAL_LIMIT} free search\\.*\nRecharge or get free access to continue\\.`;
-        const keyboard = Markup.inlineKeyboard([
+        const claimPrompt = user.free_access_claimed ? 'Recharge to continue\\.' : '*Complete the free task to claim 5 searches\\.*';
+        const msg = `⚠️ *INSUFFICIENT BALANCE\\!*\n\n*You used your ${FREE_TRIAL_LIMIT} free search\\.*\n${claimPrompt}`;
+        
+        const buttons = [
           [Markup.button.url('💳 ADD PAYMENT', 'https://t.me/zecboy')],
-          [Markup.button.callback('🎁 GET FREE ACCESS (5 Searches)', 'get_free_access')]
-        ]);
+        ];
+
+        if (!user.free_access_claimed) {
+          buttons.push([Markup.button.callback('🎁 GET FREE ACCESS (5 Searches)', 'get_free_access')]);
+        }
+
+        const keyboard = Markup.inlineKeyboard(buttons);
         return ctx.reply(msg, { parse_mode: 'MarkdownV2', reply_markup: keyboard.reply_markup });
         // -----------------------------------------------------------
       }
@@ -231,6 +231,36 @@ bot.use(async (ctx, next) => {
 
 // ---------------- START ----------------
 bot.start(async (ctx) => {
+  const payload = ctx.startPayload;
+  await connectDB();
+  const user = await getUserData(ctx.from.id);
+  
+  // --- NEW: Handle Deep Link Activation ---
+  if (payload === ACTIVATION_START_PARAM) {
+    if (user.free_access_claimed) {
+      return ctx.reply('⚠️ *CREDIT ALREADY CLAIMED\\!* 🚫\n\nYou have already claimed your 5 free searches\\. Recharge to continue\\.', { parse_mode: 'MarkdownV2' });
+    }
+    
+    // Grant 5 credits and set claimed flag
+    const amountToGrant = 5; 
+    await usersCollection.updateOne(
+      { _id: ctx.from.id }, 
+      { 
+        $inc: { balance: amountToGrant }, 
+        $set: { free_access_claimed: true } 
+      }, 
+      { upsert: true }
+    );
+
+    const updatedUser = await usersCollection.findOne({ _id: ctx.from.id });
+    
+    // THIS IS THE ACTIVATION MESSAGE
+    return ctx.reply(`🎉 *YOUR 5 SEARCHES ACTIVATED\\!* ✅\n\n*${amountToGrant} credits added to your balance\\.*\n*CURRENT BALANCE:* ${escapeMdV2(String(updatedUser.balance))} TK\\.`, { parse_mode: 'MarkdownV2' });
+  }
+  // --- END: Handle Deep Link Activation ---
+
+
+  // --- Existing /start logic ---
   const member = await checkMembership(ctx);
   const startMd = [
     '████████████████████',
@@ -272,11 +302,14 @@ bot.action('try_num', (ctx) => {
 bot.action('get_free_access', async (ctx) => {
   await ctx.answerCbQuery('Fetching free access link...');
   
-  // The API to fetch the redirect link
-  const redirectUrlApi = 'https://vplink.in/api?api=9c06662a8be6f2fc0aff86f302586f967fe917bb&url=https://t.me/infotrac_bot&alias=inforatrack&format=text';
+  const user = await getUserData(ctx.from.id);
+  if (user.free_access_claimed) {
+    return ctx.reply('⚠️ *FREE ACCESS ALREADY CLAIMED\\!* Recharge to continue\\.', { parse_mode: 'MarkdownV2' });
+  }
 
+  // The API URL is now constructed using the CALLBACK_DEEP_LINK
   try {
-    const response = await axios.get(redirectUrlApi);
+    const response = await axios.get(VPLINK_API_URL);
     const redirectLink = response.data.trim();
 
     // Send the user the link to complete the free access step
@@ -284,7 +317,7 @@ bot.action('get_free_access', async (ctx) => {
       [Markup.button.url('🔗 Complete Verification for 5 Searches', redirectLink)]
     ]);
 
-    await ctx.reply('*⚠️ IMPORTANT: Complete the step via the link below to get 5 free searches\\!*', {
+    await ctx.reply('*⚠️ IMPORTANT: Complete the step via the link below\\. You will be automatically credited upon return\\!*', {
       parse_mode: 'MarkdownV2',
       reply_markup: keyboard.reply_markup,
       disable_web_page_preview: true
@@ -393,7 +426,6 @@ bot.command('num', async (ctx) => {
     if (aadhaarRes.data && Array.isArray(aadhaarRes.data.data)) {
         combined = aadhaarRes.data;
     } else if (aadhaarRes.data) {
-        // Handle cases where the top-level is the data structure itself (less likely but safer)
         combined = aadhaarRes.data;
     } else {
         combined = { status: 'failed', data: [ { error: 'No data from API' } ] };
@@ -407,7 +439,6 @@ bot.command('num', async (ctx) => {
       user_id: ctx.from.id,
       phone,
       result_summary: {
-        // name_status is now irrelevant
         aadhaar_status: 'fulfilled' 
       },
       cost: (user.search_count <= FREE_TRIAL_LIMIT ? 0 : COST_PER_SEARCH),
@@ -447,20 +478,6 @@ bot.command('admin', adminOnly, async (ctx) => {
   return ctx.reply('*Admin Panel*', { parse_mode: 'MarkdownV2', reply_markup: kb.reply_markup });
 });
 
-// ---------------- CUSTOM ADDITION: ADMIN COMMAND TO ACTIVATE FREE SEARCHES ----------------
-// Grants 5 TK which is equivalent to 5 searches if COST_PER_SEARCH = 1, or 2 searches if COST_PER_SEARCH = 2 (plus 1 left over).
-bot.command('activate5', adminOnly, async (ctx) => {
-  const userId = ctx.from.id;
-  
-  await connectDB();
-  // Grant a set amount of balance (e.g., 5 TK)
-  const amountToGrant = 5; 
-  await usersCollection.updateOne({ _id: userId }, { $inc: { balance: amountToGrant } }, { upsert: true });
-
-  const updatedUser = await usersCollection.findOne({ _id: userId });
-  
-  await ctx.reply(`🎉 *YOUR 5 SEARCHES ACTIVATED\\!* \n\n*CURRENT BALANCE:* ${escapeMdV2(String(updatedUser.balance))} TK\\.`, { parse_mode: 'MarkdownV2' });
-});
 
 bot.action(/admin_(.+)/, adminOnly, async (ctx) => {
   const action = ctx.match[1];
@@ -473,8 +490,6 @@ bot.action(/admin_(.+)/, adminOnly, async (ctx) => {
     case 'unban': await ctx.reply('UNBAN MODE\nFormat: UserID\nExample: 123456789'); break;
     case 'status': await ctx.reply('STATUS MODE\nFormat: UserID\nExample: 123456789'); break;
     case 'view_logs': await ctx.reply('VIEW LOGS MODE\nFormat: number (how many recent logs) Example: 10'); break;
-    case 'add_block': await ctx.reply('ADD BLOCK MODE\nFormat: phone Example: 7047997398'); break;
-    case 'remove_block': await ctx.reply('REMOVE BLOCK MODE\nFormat: phone Example: 7047997398'); break;
     default: await ctx.reply('Unknown admin action'); break;
   }
   await ctx.answerCbQuery();
