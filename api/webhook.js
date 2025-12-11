@@ -4,7 +4,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
-const { URLSearchParams } = require('url'); // Added for robust URL encoding
+const { URLSearchParams } = require('url');
 
 // ---------------- CONFIG ----------------
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -293,38 +293,18 @@ bot.start(async (ctx) => {
     [Markup.button.url('💳 Buy Credits', `https://t.me/${PAYMENT_CONTACT.substring(1)}`), Markup.button.url('📩 Contact Owner', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)]
   ]);
   
-  // Handle /start?token=X (support both token_123 and token=123 formats)
+  // Handle /start?token=X (assuming this is how vplink will redirect back)
   const startPayload = ctx.message.text.split(' ')[1] || '';
-  let tokenValue = null;
-  if (startPayload && typeof startPayload === 'string') {
-    if (startPayload.includes('token_')) {
-      tokenValue = startPayload.split('token_')[1];
-    } else if (startPayload.includes('token=')) {
-      tokenValue = startPayload.split('token=')[1];
-    }
-  }
-
-  const isTokenActivated = !!tokenValue;
-
+  const isTokenActivated = startPayload.startsWith('token_'); // Checking for the fixed pattern
+  
   if (isTokenActivated) {
-    // Only activate if the token corresponds to this user (prevents wrongful activation)
-    try {
-      const tokenOwnerId = tokenValue ? tokenValue.toString() : '';
-      if (tokenOwnerId && String(tokenOwnerId) === String(ctx.from.id)) {
-        // Grant 5 bonus searches
-        await usersCollection.updateOne({ _id: ctx.from.id }, { $set: { bonus_search_count: BONUS_TRIAL_LIMIT } }, { upsert: true });
-        
-        // Send success message and initial start message
-        await ctx.reply('✅ *TOKEN ACTIVATED\\!* You have received 5 bonus searches\\.', { parse_mode: 'MarkdownV2' });
-        await ctx.reply(startMd, { parse_mode: 'MarkdownV2', disable_web_page_preview: true, ...{} });
-        return;
-      } else {
-        // Token didn't match the user; ignore token activation but continue
-        console.warn(`Token mismatch on start: token=${tokenValue} user=${ctx.from.id}`);
-      }
-    } catch (err) {
-      console.error('Token activation error:', err.message);
-    }
+    // Grant 5 bonus searches (regardless of what the token actually is, as per request)
+    await usersCollection.updateOne({ _id: ctx.from.id }, { $set: { bonus_search_count: BONUS_TRIAL_LIMIT } }, { upsert: true });
+    
+    // Send success message and initial start message
+    await ctx.reply('✅ *TOKEN ACTIVATED\\!* You have received 5 bonus searches\\.', { parse_mode: 'MarkdownV2' });
+    await ctx.reply(startMd, { parse_mode: 'MarkdownV2', disable_web_page_preview: true, ...{} });
+    return;
   }
 
   if (member) {
@@ -344,25 +324,19 @@ bot.action('try_num', (ctx) => {
 bot.action('free_access_link', async (ctx) => {
     await ctx.answerCbQuery('Generating free access link...');
     try {
-        // Construct the redirect URL back to the bot with a safe token/start parameter
-        // Use token_<USERID> format to avoid double '=' problems and keep it alphanumeric-friendly
-        const token = `token_${ctx.from.id}`;
-        const longUrl = `https://t.me/infotrac_bot?start=${token}`;
+        // FIX: Replaced =token= with =token_ to avoid double equal signs (==) and URL parsing issues.
+        const longUrl = `https://t.me/infotrac_bot?start=token_${ctx.from.id}`;
         
-        // Generate a unique alphanumeric alias to avoid "Alias already exists"
-        // Use only letters and digits (no dots/spaces). We'll build alias as: inforaalise<userid><last4ms>
-        const alias = `inforaalise${String(ctx.from.id)}${String(Date.now()).slice(-4)}`;
-
         // Build the query parameters for the link shortening API
         const params = new URLSearchParams({
             api: FREE_ACCESS_API_TOKEN,
             url: longUrl,
-            alias: alias
+            alias: 'inforaalise' // Keeping manual alias as per previous request
         });
 
         // Make the GET request
         const url = `${FREE_ACCESS_API_BASE_URL}?${params.toString()}`;
-        // INCREASED TIMEOUT FROM 10000ms TO 20000ms (20 seconds) to prevent timeout error
+        // Increased timeout to 20 seconds
         const res = await axios.get(url, { timeout: 20000 }); 
         
         // Check for the expected JSON response structure
@@ -377,12 +351,9 @@ bot.action('free_access_link', async (ctx) => {
 
             await ctx.reply(message, { parse_mode: 'MarkdownV2', reply_markup: keyboard.reply_markup, disable_web_page_preview: true });
         } else if (res.data && res.data.status === 'error') {
-             // FIX: Escaping error message from API response
-             // API sometimes returns message as array; join if so
-             let rawMsg = res.data.message;
-             if (Array.isArray(rawMsg)) rawMsg = rawMsg.join(' | ');
-             const errorMessage = escapeMdV2(String(rawMsg || 'API error message is missing.'));
-             await ctx.reply(`❌ Link API Error: ${errorMessage}\\. Try again or use *Add Payment*\\.`, { parse_mode: 'MarkdownV2' });
+             // Escaping error message from API response
+             const errorMessage = escapeMdV2(res.data.message || 'API error message is missing.');
+             await ctx.reply(`❌ Link API Error: ${errorMessage}\\. Try again or use *Add Payment*\\\\.`, { parse_mode: 'MarkdownV2' });
         } else {
              await ctx.reply('❌ Failed to generate free access link \\(Unknown response\\)\\. Please try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
         }
