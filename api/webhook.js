@@ -6,37 +6,31 @@ const axios = require('axios');
 const { MongoClient } = require('mongodb');
 
 // ---------------- CONFIG ----------------
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const MONGODB_URI = process.env.MONGODB_URI;
-const DB_NAME = process.env.DB_NAME || 'osint_user_db';
-const USERS_COL = process.env.COLLECTION_NAME || 'users';
-const LOGS_COL = process.env.LOGS_COLLECTION || 'search_logs';
-const BLOCKED_COL = process.env.BLOCKED_COLLECTION || 'blocked_numbers';
+// ... (other variables) ...
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID, 10) : null;
 
 const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531';
 // IMPORTANT: You MUST replace 'infotrac_bot' below with your actual bot's @username
-const BOT_USERNAME = process.env.BOT_USERNAME || 'infotrac_bot'; 
+const BOT_USERNAME = process.env.BOT_USERNAME || 'infotrac_bot'; // <--- এখানে আপনার বটের @ইউজারনেম দিন (যেমন: my_osint_bot)
 const GROUP_JOIN_LINK = process.env.GROUP_JOIN_LINK || 'https://t.me/+3TSyKHmwOvRmNDJl';
 // Deep Link Parameter for activation
 const ACTIVATION_START_PARAM = 'activate_free_5'; 
 
 const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '1', 10);
-const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
-const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
+// ... (other variables) ...
 
 const API_CONFIG = {
-  // Keeping the original structure but setting the same API key for consistency
-  NAME_FINDER: process.env.APISUITE_NAMEFINDER || 'https://m.apisuite.in/?api=namefinder&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number=',
-  AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://m.apisuite.in/?api=number-to-aadhaar&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number='
+  // ... (API Keys) ...
 };
 const VPLINK_BASE_URL = 'https://vplink.in';
 // The URL the external service redirects the user *back* to, with the start parameter
 const CALLBACK_DEEP_LINK = `https://t.me/${BOT_USERNAME}?start=${ACTIVATION_START_PARAM}`;
 // The API URL used to generate the final VPLINK redirect URL
+// NOTE: axios.get will handle the encoding, but we ensure the deep link is correct.
 const VPLINK_API_URL = `https://vplink.in/api?api=9c06662a8be6f2fc0aff86f302586f967fe917bb&url=${encodeURIComponent(CALLBACK_DEEP_LINK)}&alias=inforatrack&format=text`;
 
 let MAINTENANCE_MODE = (process.env.MAINTENANCE_MODE === '1');
+// ... (rest of the code) ...
 
 // ---------------- MONGO SETUP ----------------
 if (!MONGODB_URI) {
