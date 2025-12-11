@@ -6,31 +6,37 @@ const axios = require('axios');
 const { MongoClient } = require('mongodb');
 
 // ---------------- CONFIG ----------------
-// ... (other variables) ...
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const MONGODB_URI = process.env.MONGODB_URI;
+const DB_NAME = process.env.DB_NAME || 'osint_user_db';
+const USERS_COL = process.env.COLLECTION_NAME || 'users';
+const LOGS_COL = process.env.LOGS_COLLECTION || 'search_logs';
+const BLOCKED_COL = process.env.BLOCKED_COLLECTION || 'blocked_numbers';
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID, 10) : null;
 
 const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531';
 // IMPORTANT: You MUST replace 'infotrac_bot' below with your actual bot's @username
-const BOT_USERNAME = process.env.BOT_USERNAME || 'infotrac_bot'; // <--- এখানে আপনার বটের @ইউজারনেম দিন (যেমন: my_osint_bot)
+const BOT_USERNAME = process.env.BOT_USERNAME || 'infotrac_bot'; 
 const GROUP_JOIN_LINK = process.env.GROUP_JOIN_LINK || 'https://t.me/+3TSyKHmwOvRmNDJl';
 // Deep Link Parameter for activation
 const ACTIVATION_START_PARAM = 'activate_free_5'; 
 
 const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '1', 10);
-// ... (other variables) ...
+const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
+const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
 
 const API_CONFIG = {
-  // ... (API Keys) ...
+  // Keeping the original structure but setting the same API key for consistency
+  NAME_FINDER: process.env.APISUITE_NAMEFINDER || 'https://m.apisuite.in/?api=namefinder&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number=',
+  AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://m.apisuite.in/?api=number-to-aadhaar&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number='
 };
 const VPLINK_BASE_URL = 'https://vplink.in';
 // The URL the external service redirects the user *back* to, with the start parameter
 const CALLBACK_DEEP_LINK = `https://t.me/${BOT_USERNAME}?start=${ACTIVATION_START_PARAM}`;
 // The API URL used to generate the final VPLINK redirect URL
-// NOTE: axios.get will handle the encoding, but we ensure the deep link is correct.
 const VPLINK_API_URL = `https://vplink.in/api?api=9c06662a8be6f2fc0aff86f302586f967fe917bb&url=${encodeURIComponent(CALLBACK_DEEP_LINK)}&alias=inforatrack&format=text`;
 
 let MAINTENANCE_MODE = (process.env.MAINTENANCE_MODE === '1');
-// ... (rest of the code) ...
 
 // ---------------- MONGO SETUP ----------------
 if (!MONGODB_URI) {
@@ -156,7 +162,7 @@ async function sendAdminFile(ctx, filename, obj, caption) {
 // ---------------- MIDDLEWARE ----------------
 bot.use(async (ctx, next) => {
   const text = ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
-  // Removed activate5 from isCmd check as it's handled via /start
+  // Removed activate5, handled by /start
   const isCmd = text && /^\/(num|balance|donate|support|buyapi|admin|status)\b/.test(text); 
 
   if (text.startsWith('/start')) return next(); // Allow /start to pass through for special handling
@@ -301,10 +307,14 @@ bot.action('get_free_access', async (ctx) => {
     return ctx.reply('⚠️ *FREE ACCESS ALREADY CLAIMED\\!* Recharge to continue\\.', { parse_mode: 'MarkdownV2' });
   }
 
-  // The API URL is now constructed using the CALLBACK_DEEP_LINK
   try {
-    const response = await axios.get(VPLINK_API_URL);
+    // Use the pre-configured VPLINK_API_URL
+    const response = await axios.get(VPLINK_API_URL, { timeout: 10000 });
     const redirectLink = response.data.trim();
+
+    if (!redirectLink.startsWith(VPLINK_BASE_URL)) {
+      throw new Error('Invalid link structure received from VPLINK API.');
+    }
 
     // Send the user the link to complete the free access step
     const keyboard = Markup.inlineKeyboard([
@@ -319,7 +329,8 @@ bot.action('get_free_access', async (ctx) => {
 
   } catch (err) {
     console.error('Free access API fetch error:', err.message);
-    await ctx.reply('❌ Failed to generate free access link\\. Please try again later\\.', { parse_mode: 'MarkdownV2' });
+    // Added a specific error message for the VPLINK failure
+    await ctx.reply('❌ Failed to generate free access link\\. API Error: Please try again later\\.', { parse_mode: 'MarkdownV2' });
   }
 });
 
@@ -484,6 +495,8 @@ bot.action(/admin_(.+)/, adminOnly, async (ctx) => {
     case 'unban': await ctx.reply('UNBAN MODE\nFormat: UserID\nExample: 123456789'); break;
     case 'status': await ctx.reply('STATUS MODE\nFormat: UserID\nExample: 123456789'); break;
     case 'view_logs': await ctx.reply('VIEW LOGS MODE\nFormat: number (how many recent logs) Example: 10'); break;
+    case 'add_block': await ctx.reply('ADD BLOCK MODE\nFormat: phone Example: 7047997398'); break;
+    case 'remove_block': await ctx.reply('REMOVE BLOCK MODE\nFormat: phone Example: 7047997398'); break;
     default: await ctx.reply('Unknown admin action'); break;
   }
   await ctx.answerCbQuery();
