@@ -15,26 +15,22 @@ const BLOCKED_COL = process.env.BLOCKED_COLLECTION || 'blocked_numbers';
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID, 10) : null;
 
 const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531';
-// IMPORTANT: You MUST replace 'infotrac_bot' below with your actual bot's @username
 const BOT_USERNAME = process.env.BOT_USERNAME || 'infotrac_bot'; 
 const GROUP_JOIN_LINK = process.env.GROUP_JOIN_LINK || 'https://t.me/+3TSyKHmwOvRmNDJl';
-// Deep Link Parameter for activation
-const ACTIVATION_START_PARAM = 'activate_free_5'; 
 
 const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '1', 10);
 const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
 const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
 
 const API_CONFIG = {
-  // Keeping the original structure but setting the same API key for consistency
   NAME_FINDER: process.env.APISUITE_NAMEFINDER || 'https://m.apisuite.in/?api=namefinder&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number=',
   AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://m.apisuite.in/?api=number-to-aadhaar&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number='
 };
 const VPLINK_BASE_URL = 'https://vplink.in';
-// The URL the external service redirects the user *back* to, with the start parameter
-const CALLBACK_DEEP_LINK = `https://t.me/${BOT_USERNAME}?start=${ACTIVATION_START_PARAM}`;
-// The API URL used to generate the final VPLINK redirect URL
-const VPLINK_API_URL = `https://vplink.in/api?api=9c06662a8be6f2fc0aff86f302586f967fe917bb&url=${encodeURIComponent(CALLBACK_DEEP_LINK)}&alias=inforatrack&format=text`;
+// The user is redirected to the bot's standard link after VPLINK task
+const CALLBACK_SIMPLE_LINK = `https://t.me/${BOT_USERNAME}`;
+// VPLINK API URL using the simple callback link
+const VPLINK_API_URL = `https://vplink.in/api?api=9c06662a8be6f2fc0aff86f302586f967fe917bb&url=${encodeURIComponent(CALLBACK_SIMPLE_LINK)}&alias=inforatrack&format=text`;
 
 let MAINTENANCE_MODE = (process.env.MAINTENANCE_MODE === '1');
 
@@ -116,14 +112,20 @@ async function getUserData(userId) {
       role: (userId === ADMIN_USER_ID ? 'admin' : 'user'),
       admin_state: null,
       last_search_ts: 0,
-      free_access_claimed: false 
+      free_access_claimed: false,
+      free_access_started: false // NEW: Track if user initiated the free access flow
     };
     await usersCollection.insertOne(newUser);
     return newUser;
   }
+  // Ensure old users have the flags
   if (user.free_access_claimed === undefined) {
     user.free_access_claimed = false;
     await usersCollection.updateOne({ _id: userId }, { $set: { free_access_claimed: false } });
+  }
+  if (user.free_access_started === undefined) {
+    user.free_access_started = false;
+    await usersCollection.updateOne({ _id: userId }, { $set: { free_access_started: false } });
   }
   return user;
 }
@@ -163,8 +165,9 @@ async function sendAdminFile(ctx, filename, obj, caption) {
 bot.use(async (ctx, next) => {
   const text = ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
   const isCmd = text && /^\/(num|balance|donate|support|buyapi|admin|status)\b/.test(text); 
-
-  if (text.startsWith('/start')) return next(); 
+  
+  // Allow /start and inline button presses to pass
+  if (text.startsWith('/start') || ctx.callbackQuery) return next(); 
 
   const chatType = ctx.chat && ctx.chat.type ? ctx.chat.type : 'private';
   if (isCmd && chatType !== 'private') {
@@ -199,7 +202,15 @@ bot.use(async (ctx, next) => {
       const hasBalance = user.balance >= COST_PER_SEARCH;
       if (!isFree && !hasBalance) {
         // --- CUSTOM MODIFICATION: INSUFFICIENT BALANCE BUTTONS ---
-        const claimPrompt = user.free_access_claimed ? 'Recharge to continue\\.' : '*Complete the free task to claim 5 searches\\.*';
+        let claimPrompt;
+        if (user.free_access_claimed) {
+          claimPrompt = 'Recharge to continue\\.';
+        } else if (user.free_access_started) {
+          claimPrompt = `*Task initiated\\.* Run \`/start\` to find the *Claim Button*\\!`;
+        } else {
+          claimPrompt = '*Click the Free Access button below to start the process\\.*';
+        }
+
         const msg = `⚠️ *INSUFFICIENT BALANCE\\!*\n\n*You used your ${FREE_TRIAL_LIMIT} free search\\.*\n${claimPrompt}`;
         
         const buttons = [
@@ -230,35 +241,14 @@ bot.use(async (ctx, next) => {
 
 // ---------------- START ----------------
 bot.start(async (ctx) => {
-  const payload = ctx.startPayload;
+  const payload = ctx.startPayload; // Check if there's a start parameter (like /start activate_free_5)
   await connectDB();
   const user = await getUserData(ctx.from.id);
   
-  // --- NEW: Handle Deep Link Activation ---
-  if (payload === ACTIVATION_START_PARAM) {
-    if (user.free_access_claimed) {
-      return ctx.reply('⚠️ *CREDIT ALREADY CLAIMED\\!* 🚫\n\nYou have already claimed your 5 free searches\\. Recharge to continue\\.', { parse_mode: 'MarkdownV2' });
-    }
-    
-    // Grant 5 credits and set claimed flag
-    const amountToGrant = 5; 
-    await usersCollection.updateOne(
-      { _id: ctx.from.id }, 
-      { 
-        $inc: { balance: amountToGrant }, 
-        $set: { free_access_claimed: true } 
-      }, 
-      { upsert: true }
-    );
-
-    const updatedUser = await usersCollection.findOne({ _id: ctx.from.id });
-    
-    // THIS IS THE ACTIVATION MESSAGE
-    return ctx.reply(`🎉 *YOUR 5 SEARCHES ACTIVATED\\!* ✅\n\n*${amountToGrant} credits added to your balance\\.*\n*CURRENT BALANCE:* ${escapeMdV2(String(updatedUser.balance))} TK\\.`, { parse_mode: 'MarkdownV2' });
-  }
-  // --- END: Handle Deep Link Activation ---
-
-
+  // --- Handle Deep Link Activation (if VPLINK works with deep links) ---
+  // This block is simplified to handle only the claim button flow below.
+  // If payload handling is needed for other features, it should be here.
+  
   // --- Existing /start logic ---
   const member = await checkMembership(ctx);
   const startMd = [
@@ -279,13 +269,20 @@ bot.start(async (ctx) => {
     '⚡ *Powered by INFORA PRO*'
   ].join('\n');
 
-  const keyboard = Markup.inlineKeyboard([
+  let buttons = [
     [Markup.button.callback('🔎 Try /num', 'try_num')],
     [Markup.button.url('💳 Buy Credits', 'https://t.me/zecboy'), Markup.button.url('📩 Contact Owner', 'https://t.me/zecboy')]
-  ]);
+  ];
+
+  // NEW: If user initiated the flow but hasn't claimed, show the CLAIM button
+  if (user.free_access_started && !user.free_access_claimed) {
+    buttons.unshift([Markup.button.callback('✅ CLICK TO GET 5 SEARCHES', 'claim_free_5')]);
+  }
+
+  const keyboard = Markup.inlineKeyboard(buttons);
 
   if (member) {
-    return ctx.reply(startMd, { parse_mode: 'MarkdownV2', disable_web_page_preview: true, ...{} });
+    return ctx.reply(startMd, { parse_mode: 'MarkdownV2', disable_web_page_preview: true, reply_markup: keyboard.reply_markup });
   } else {
     const joinKb = Markup.inlineKeyboard([[Markup.button.url('🔒 JOIN MANDATORY GROUP', GROUP_JOIN_LINK)], [Markup.button.callback('🔎 Try /num', 'try_num')] ]);
     return ctx.reply('👋 *WELCOME TO OSINT BOT\\!* You MUST JOIN THE GROUP to use commands\\.', joinKb);
@@ -297,7 +294,44 @@ bot.action('try_num', (ctx) => {
   ctx.reply('To search a number use: /num <phone>');
 });
 
-// ---------------- FREE ACCESS HANDLER (Custom Addition) ----------------
+// ---------------- CLAIM BUTTON HANDLER (New Secure Action) ----------------
+bot.action('claim_free_5', async (ctx) => {
+  await ctx.answerCbQuery('Checking claim status...');
+  await connectDB();
+  const userId = ctx.from.id;
+  const user = await getUserData(userId);
+
+  if (!user.free_access_started) {
+    return ctx.reply('⚠️ *ERROR\\!* You must click the "GET FREE ACCESS" button first to start the process\\.', { parse_mode: 'MarkdownV2' });
+  }
+  if (user.free_access_claimed) {
+    return ctx.reply('⚠️ *CREDIT ALREADY CLAIMED\\!* 🚫\n\nYou have already claimed your 5 free searches\\. Recharge to continue\\.', { parse_mode: 'MarkdownV2' });
+  }
+  
+  // Grant 5 credits and set both flags
+  const amountToGrant = 5; 
+  await usersCollection.updateOne(
+    { _id: userId }, 
+    { 
+      $inc: { balance: amountToGrant }, 
+      $set: { free_access_claimed: true, free_access_started: false } // Reset started flag
+    }, 
+    { upsert: true }
+  );
+
+  const updatedUser = await usersCollection.findOne({ _id: userId });
+  
+  // Edit the message to remove the claim button
+  try {
+    await ctx.editMessageText(`🎉 *YOUR 5 SEARCHES ACTIVATED\\!* ✅\n\n*${amountToGrant} credits added to your balance\\.*\n*CURRENT BALANCE:* ${escapeMdV2(String(updatedUser.balance))} TK\\.`, { parse_mode: 'MarkdownV2' });
+  } catch (e) {
+    // In case the message cannot be edited (too old)
+    await ctx.reply(`🎉 *YOUR 5 SEARCHES ACTIVATED\\!* ✅\n\n*${amountToGrant} credits added to your balance\\.*\n*CURRENT BALANCE:* ${escapeMdV2(String(updatedUser.balance))} TK\\.`, { parse_mode: 'MarkdownV2' });
+  }
+});
+
+
+// ---------------- FREE ACCESS HANDLER (Initiates the VPLINK flow) ----------------
 bot.action('get_free_access', async (ctx) => {
   await ctx.answerCbQuery('Fetching free access link...');
   
@@ -307,27 +341,25 @@ bot.action('get_free_access', async (ctx) => {
   }
 
   try {
-    // Use the pre-configured VPLINK_API_URL
+    // 1. Set the 'started' flag before redirecting
+    await usersCollection.updateOne({ _id: ctx.from.id }, { $set: { free_access_started: true } });
+    
+    // 2. Call VPLINK API
     const response = await axios.get(VPLINK_API_URL, { timeout: 10000 });
     const redirectLink = response.data.trim();
 
-    // Check 1: Ensure the link is not empty
-    if (!redirectLink) {
-      throw new Error('VPLINK API returned an empty response.');
+    if (!redirectLink || !redirectLink.startsWith(VPLINK_BASE_URL)) {
+      // If VPLINK fails, reset the 'started' flag so the user can try again.
+      await usersCollection.updateOne({ _id: ctx.from.id }, { $set: { free_access_started: false } });
+      throw new Error(redirectLink ? `Invalid link structure received: ${redirectLink}` : 'VPLINK API returned an empty response.');
     }
 
-    // Check 2: Ensure the link starts with the expected base URL (vplink)
-    if (!redirectLink.startsWith(VPLINK_BASE_URL)) {
-      // If it fails, log the actual response for debugging
-      throw new Error(`Invalid link structure received: ${redirectLink}`); 
-    }
-
-    // Send the user the link to complete the free access step
+    // 3. Send the user the link + instruction to run /start
     const keyboard = Markup.inlineKeyboard([
-      [Markup.button.url('🔗 Complete Verification for 5 Searches', redirectLink)]
+      [Markup.button.url('🔗 COMPLETE VPLINK TASK', redirectLink)]
     ]);
 
-    await ctx.reply('*⚠️ IMPORTANT: Complete the step via the link below\\. You will be automatically credited upon return\\!*', {
+    await ctx.reply('*⚠️ TASK STARTED\\!* Please complete the task via the link below\\. *After completion, run* \`/start\` *to get your claim button\\!*', {
       parse_mode: 'MarkdownV2',
       reply_markup: keyboard.reply_markup,
       disable_web_page_preview: true
@@ -336,9 +368,8 @@ bot.action('get_free_access', async (ctx) => {
   } catch (err) {
     console.error('Free access API fetch error:', err.message);
     
-    // Get the error message and make it MarkdownV2 safe
     const rawErrorMessage = err.message || 'Unknown network error.';
-    const displayMessage = rawErrorMessage.includes('400') ? 'VPLINK API rejected the request (Configuration error).' : rawErrorMessage;
+    const displayMessage = rawErrorMessage.includes('400') ? 'VPLINK API rejected the request (Check VPLINK API key/config).' : rawErrorMessage;
 
     await ctx.reply(`❌ API Error: Failed to generate free access link\\.\nError: ${escapeMdV2(displayMessage)}\\.`, { parse_mode: 'MarkdownV2' });
   }
