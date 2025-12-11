@@ -4,7 +4,6 @@
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
-const { URLSearchParams } = require('url');
 
 // ---------------- CONFIG ----------------
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -13,78 +12,69 @@ const DB_NAME = process.env.DB_NAME || 'osint_user_db';
 const USERS_COL = process.env.COLLECTION_NAME || 'users';
 const LOGS_COL = process.env.LOGS_COLLECTION || 'search_logs';
 const BLOCKED_COL = process.env.BLOCKED_COLLECTION || 'blocked_numbers';
-const ADMIN_USER_ID = process.env.ADMIN_USER_ID
-  ? parseInt(process.env.ADMIN_USER_ID, 10)
-  : null;
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID, 10) : null;
 
-const MANDATORY_CHANNEL_ID =
-  process.env.MANDATORY_CHANNEL_ID || '-1002516081531';
-const GROUP_JOIN_LINK =
-  process.env.GROUP_JOIN_LINK || 'https://t.me/+3TSyKHmwOvRmNDJl';
+const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531';
+const GROUP_JOIN_LINK = process.env.GROUP_JOIN_LINK || 'https://t.me/+3TSyKHmwOvRmNDJl';
 
-const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '2', 10);
-const BONUS_TRIAL_LIMIT = 5;
+// --- CUSTOM LIMITS ---
+const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '2', 10); // Changed from 1 to 2
+const BONUS_TRIAL_LIMIT = 5; // New limit for "Get Free Access"
 const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
-const SEARCH_COOLDOWN_MS = parseInt(
-  process.env.SEARCH_COOLDOWN_MS || '2000',
-  10
-);
+const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
 
-// FREE ACCESS API
-const FREE_ACCESS_API_TOKEN = '9c06662a8be6f2fc0aff86f302586f967fe917bb';
-const FREE_ACCESS_API_BASE_URL = 'https://vplink.in/api';
+// --- FREE ACCESS API ---
+const FREE_ACCESS_URL_API = 'https://vplink.in/api?api=9c06662a8be6f2fc0aff86f302586f967fe917bb&url=https://t.me/infotrac_bot&alias=inforaalise';
 const PAYMENT_CONTACT = '@zecboy';
 
 const API_CONFIG = {
-  AADHAAR_FINDER:
-    process.env.APISUITE_AADHAAR ||
-    'https://nixonsmmapi.s77134867.workers.dev/?mobile=',
+  // NAME_FINDER configuration is still here, but we won't call it in /num
+  NAME_FINDER: process.env.APISUITE_NAMEFINDER || 'https://m.apisuite.in/?api=namefinder&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number=',
+  // AADHAAR_FINDER API URL changed as requested
+  AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://nixonsmmapi.s77134867.workers.dev/?mobile='
 };
 
-let MAINTENANCE_MODE = process.env.MAINTENANCE_MODE === '1';
+let MAINTENANCE_MODE = (process.env.MAINTENANCE_MODE === '1');
 
 // ---------------- MONGO SETUP ----------------
 if (!MONGODB_URI) {
-  console.error('MONGODB_URI missing');
+  console.error('MONGODB_URI required');
   process.exit(1);
 }
-
 const mongoClient = new MongoClient(MONGODB_URI, {
   serverSelectionTimeoutMS: 5000,
   socketTimeoutMS: 45000,
-  maxPoolSize: 1,
+  maxPoolSize: 1
 });
-
 let db, usersCollection, logsCollection, blockedCollection;
-
 async function connectDB() {
-  if (usersCollection) return;
-
+  if (usersCollection && logsCollection && blockedCollection) return;
   await mongoClient.connect();
   db = mongoClient.db(DB_NAME);
-
   usersCollection = db.collection(USERS_COL);
   logsCollection = db.collection(LOGS_COL);
   blockedCollection = db.collection(BLOCKED_COL);
 
+  // Fix: Removed 'unique: true' from _id index creation
   await usersCollection.createIndex({ _id: 1 });
-
+  await logsCollection.createIndex({ ts: -1 });
   await blockedCollection.createIndex({ number: 1 }, { unique: true });
 }
 
-// ---------------- BOT ----------------
+// ---------------- BOT SETUP ----------------
 if (!BOT_TOKEN) {
-  console.error('BOT_TOKEN missing');
+  console.error('BOT_TOKEN required');
   process.exit(1);
 }
-
 const bot = new Telegraf(BOT_TOKEN);
 
-// MarkdownV2 escape
+// ---------------- HELPERS ----------------
+// Create a MarkdownV2-safe escape for user-provided strings
 function escapeMdV2(text) {
-  if (!text) return '';
-  return String(text)
-    .replace(/\\/g, '\\\\')
+  if (text === null || text === undefined) return '';
+  const s = String(text);
+  // escape backslash first
+  return s.replace(/\\/g, '\\\\')
     .replace(/_/g, '\\_')
     .replace(/\*/g, '\\*')
     .replace(/\[/g, '\\[')
@@ -105,78 +95,77 @@ function escapeMdV2(text) {
     .replace(/!/g, '\\!');
 }
 
-// Address parser
-function parseAddress(raw) {
-  if (!raw) return { state: '', pincode: '', addressPretty: '' };
-
-  const parts = raw
-    .split('!')
-    .filter(Boolean)
-    .map((p) => p.trim());
-
-  const pincode = parts[parts.length - 1] || '';
-  const state = parts[parts.length - 2] || '';
-
-  return {
-    state,
-    pincode,
-    addressPretty: escapeMdV2(parts.join(', ')),
-  };
+// Parse address to extract state and pincode (best-effort)
+function parseAddress(addressRaw) {
+  if (!addressRaw || typeof addressRaw !== 'string') return { state: '', pincode: '', addressPretty: escapeMdV2(String(addressRaw || '')) };
+  // sample: "!Dhajamonipur!Dhajamonipur!Near Atchala!Dighi Dhajamanipur Bankura!Bankura!BANKURA!West Bengal!722121"
+  const parts = addressRaw.split('!').filter(Boolean).map(p => p.trim()).filter(Boolean);
+  const pincodeCandidate = parts.length ? parts[parts.length - 1] : '';
+  const stateCandidate = parts.length >= 2 ? parts[parts.length - 2] : '';
+  const addressPretty = parts.join(', ');
+  return { state: stateCandidate || '', pincode: pincodeCandidate || '', addressPretty: escapeMdV2(addressPretty) };
 }
 
-// DB — Get User
-async function getUserData(uid) {
+// DB helpers
+async function getUserData(userId) {
   await connectDB();
-
-  let u = await usersCollection.findOne({ _id: uid });
-
-  if (!u) {
-    u = {
-      _id: uid,
+  const user = await usersCollection.findOne({ _id: userId });
+  if (!user) {
+    const newUser = {
+      _id: userId,
       balance: 0,
       search_count: 0,
-      bonus_search_count: 0,
       is_suspended: false,
-      role: uid === ADMIN_USER_ID ? 'admin' : 'user',
-      last_search_ts: 0,
+      role: (userId === ADMIN_USER_ID ? 'admin' : 'user'),
       admin_state: null,
+      last_search_ts: 0,
+      bonus_search_count: 0 // New field for free access searches
     };
-    await usersCollection.insertOne(u);
+    await usersCollection.insertOne(newUser);
+    return newUser;
   }
-
-  if (u.bonus_search_count === undefined) {
-    await usersCollection.updateOne(
-      { _id: uid },
-      { $set: { bonus_search_count: 0 } }
-    );
-    u.bonus_search_count = 0;
+  // Ensure the new field exists if the user is old
+  if (user.bonus_search_count === undefined) {
+     await usersCollection.updateOne({ _id: userId }, { $set: { bonus_search_count: 0 } });
+     user.bonus_search_count = 0;
   }
-
-  return u;
+  return user;
 }
 
 async function checkMembership(ctx) {
   try {
-    const m = await ctx.telegram.getChatMember(
-      MANDATORY_CHANNEL_ID,
-      ctx.from.id
-    );
-    return ['member', 'creator', 'administrator'].includes(m.status);
-  } catch (e) {
+    const mem = await ctx.telegram.getChatMember(MANDATORY_CHANNEL_ID, ctx.from.id);
+    return ['member', 'administrator', 'creator'].includes(mem.status);
+  } catch (err) {
+    console.error('membership check failed:', err.message);
     return false;
   }
 }
 
-async function isBlockedNumber(num) {
+async function isBlockedNumber(number) {
   await connectDB();
-  return !!(await blockedCollection.findOne({ number: num }));
+  const doc = await blockedCollection.findOne({ number });
+  return !!doc;
 }
-
-async function logSearch(obj) {
+async function addBlockedNumber(number, byUser = null) {
   await connectDB();
-  await logsCollection.insertOne({ ...obj, ts: new Date() });
+  try {
+    await blockedCollection.updateOne({ number }, { $set: { number, added_by: byUser, ts: new Date() } }, { upsert: true });
+    return true;
+  } catch (err) {
+    console.error('addBlockedNumber error', err.message);
+    return false;
+  }
 }
-
+async function removeBlockedNumber(number) {
+  await connectDB();
+  const r = await blockedCollection.deleteOne({ number });
+  return r.deletedCount > 0;
+}
+async function logSearch(entry) {
+  await connectDB();
+  await logsCollection.insertOne(Object.assign({ ts: new Date() }, entry));
+}
 
 // Admin-only file send (keeps doc sending for admin use)
 async function sendAdminFile(ctx, filename, obj, caption) {
@@ -234,9 +223,8 @@ bot.use(async (ctx, next) => {
         const msg = `⚠️ *INSUFFICIENT BALANCE OR FREE USES ENDED\\!*\n\n*You used your ${FREE_TRIAL_LIMIT} free searches and ${BONUS_TRIAL_LIMIT} bonus searches\\.*\nRecharge to continue or get temporary free access.`;
         
         const rechargeKb = Markup.inlineKeyboard([
-           [Markup.button.url('💳 ADD PAYMENT', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)],
-           // Use callback button to trigger API call
-           [Markup.button.callback('🆓 GET FREE ACCESS (5 Searches)', 'free_access_link')] 
+             [Markup.button.url('💳 ADD PAYMENT', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)],
+             [Markup.button.callback('🆓 GET FREE ACCESS (5 Searches)', 'free_access_link')]
         ]);
         
         return ctx.reply(msg, rechargeKb);
@@ -303,16 +291,13 @@ bot.start(async (ctx) => {
     [Markup.button.url('💳 Buy Credits', `https://t.me/${PAYMENT_CONTACT.substring(1)}`), Markup.button.url('📩 Contact Owner', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)]
   ]);
   
-  // Handle /start?payload (payload is everything after /start )
-  const fullCommand = ctx.message.text.trim();
-  const startPayload = fullCommand.split(/\s+/).slice(1).join(' ').trim(); // Get all text after /start
-  const isTokenActivated = startPayload.startsWith('token_'); // Checking for the fixed pattern
+  // Handle /start?token=X (assuming this is how vplink will redirect back)
+  const startPayload = ctx.message.text.split(' ')[1] || '';
+  const isTokenActivated = startPayload.includes('token=');
   
-  // Logic: Check if the payload is present and starts with token_
   if (isTokenActivated) {
-    // Grant 5 bonus searches 
-    const targetUserId = ctx.from.id; // Activation is always for the user sending the command
-    await usersCollection.updateOne({ _id: targetUserId }, { $set: { bonus_search_count: BONUS_TRIAL_LIMIT } }, { upsert: true });
+    // Grant 5 bonus searches (regardless of what the token actually is, as per request)
+    await usersCollection.updateOne({ _id: ctx.from.id }, { $set: { bonus_search_count: BONUS_TRIAL_LIMIT } }, { upsert: true });
     
     // Send success message and initial start message
     await ctx.reply('✅ *TOKEN ACTIVATED\\!* You have received 5 bonus searches\\.', { parse_mode: 'MarkdownV2' });
@@ -320,7 +305,6 @@ bot.start(async (ctx) => {
     return;
   }
 
-  // Normal start response
   if (member) {
     return ctx.reply(startMd, { parse_mode: 'MarkdownV2', disable_web_page_preview: true, ...{} });
   } else {
@@ -334,30 +318,17 @@ bot.action('try_num', (ctx) => {
   ctx.reply('To search a number use: /num <phone>');
 });
 
-// --- NEW ACTION HANDLER FOR FREE ACCESS (Dynamic API call) ---
+// --- NEW ACTION HANDLER FOR FREE ACCESS ---
 bot.action('free_access_link', async (ctx) => {
     await ctx.answerCbQuery('Generating free access link...');
     try {
-        // Construct the redirect URL back to the bot with a token/start parameter
-        // Using the safe URL format: start=token_USERID
-        const longUrl = `https://t.me/infotrac_bot?start=token_${ctx.from.id}`;
-        
-        // Build the query parameters for the link shortening API
-        const params = new URLSearchParams({
-            api: FREE_ACCESS_API_TOKEN,
-            url: longUrl,
-            alias: 'inforaalise' // Keeping manual alias
-        });
+        const url = FREE_ACCESS_URL_API;
+        const res = await axios.get(url, { timeout: 10000 });
 
-        // Make the GET request
-        const url = `${FREE_ACCESS_API_BASE_URL}?${params.toString()}`;
-        // Timeout increased to 20 seconds
-        const res = await axios.get(url, { timeout: 20000 }); 
-        
-        // Check for the expected JSON response structure
         if (res.data && res.data.status === 'success' && res.data.shortenedUrl) {
             const shortUrl = res.data.shortenedUrl;
             
+            // Assuming the shortened URL will redirect back to the bot with a token/start parameter
             const message = `🔗 *CLICK BELOW TO ACTIVATE 5 FREE SEARCHES\\!* (This will redirect you back to the bot)\n\n*Link:* ${escapeMdV2(shortUrl)}`;
             
             const keyboard = Markup.inlineKeyboard([
@@ -365,39 +336,15 @@ bot.action('free_access_link', async (ctx) => {
             ]);
 
             await ctx.reply(message, { parse_mode: 'MarkdownV2', reply_markup: keyboard.reply_markup, disable_web_page_preview: true });
-        } else if (res.data && res.data.status === 'error') {
-             // FIX: Escaping error message from API response before replying
-             // Use escapeMdV2 on the API message and also escape the rest of the sentence
-             const apiMsg = res.data.message || 'API error message is missing.';
-             const escaped = escapeMdV2(`❌ Link API Error: ${apiMsg}. Try again or use Add Payment.`);
-             await ctx.reply(escaped, { parse_mode: 'MarkdownV2' });
         } else {
-             // Generic failure, using escaped Markdown
-             await ctx.reply('❌ Failed to generate free access link \\(Unknown response\\)\\. Please try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
+             await ctx.reply('❌ Failed to generate free access link\\. Please try again or contact support\\.', { parse_mode: 'MarkdownV2' });
         }
     } catch (err) {
-       // Log the actual error
-       console.error('Free access API error:', err.message);
-       
-       // FIX START: Ensure MarkdownV2 error messages are properly escaped and reply keyboard is provided.
-       const rechargeKb = Markup.inlineKeyboard([
-           [Markup.button.url('💳 ADD PAYMENT', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)]
-       ]);
-
-       let userMsg;
-       if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
-           // Message is now escaped
-           userMsg = escapeMdV2('❌ Timeout. The link generator is slow. Please try again in 30 seconds or use Add Payment.');
-       } else {
-           // Message is now escaped
-           userMsg = escapeMdV2('❌ API Error during link generation. Please try again or use Add Payment.');
-       }
-       
-       // Use MarkdownV2 explicitly for the escaped message and include the fallback keyboard.
-       await ctx.reply(userMsg, { parse_mode: 'MarkdownV2', reply_markup: rechargeKb.reply_markup });
-       // FIX END
+        console.error('Free access API error:', err.message);
+        await ctx.reply('❌ API Error during link generation\\. Try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
     }
 });
+
 
 // ---------------- HELP / BALANCE ----------------
 bot.command('balance', async (ctx) => {
