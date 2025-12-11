@@ -361,21 +361,22 @@ bot.action('free_access_link', async (ctx) => {
              const errorMessage = escapeMdV2(res.data.message || 'API error message is missing.');
              await ctx.reply(`❌ Link API Error: ${errorMessage}\\. Try again or use *Add Payment*\\\\.`, { parse_mode: 'MarkdownV2' });
         } else {
+             // Generic failure, using escaped Markdown
              await ctx.reply('❌ Failed to generate free access link \\(Unknown response\\)\\. Please try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
         }
     } catch (err) {
         // Log the actual error
         console.error('Free access API error:', err.message);
         
-        // User-facing message: We send a generic, fully escaped message to avoid Markdown errors.
-        const userMsg = '❌ API Error during link generation\\. Please try again or use *Add Payment*\\.';
+        // User-facing message: We send a generic, PLAIN TEXT message to guarantee no Markdown parsing error.
+        const userMsg = '❌ API Error during link generation. Please try again or use Add Payment.';
 
-        // We check for timeout specifically to offer a better message
         if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
-             await ctx.reply('❌ Timeout\\. The link generator is slow\\. Please try again in 30 seconds or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
+             // Sending timeout message in Plain Text
+             await ctx.reply('❌ Timeout. The link generator is slow. Please try again in 30 seconds or use Add Payment.');
         } else {
-             // This is the primary fix for the Markdown error, sending a hardcoded escaped string
-             await ctx.reply(userMsg, { parse_mode: 'MarkdownV2' });
+             // Sending general error in Plain Text (REMOVED parse_mode: 'MarkdownV2')
+             await ctx.reply(userMsg); 
         }
     }
 });
