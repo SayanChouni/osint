@@ -4,6 +4,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
+const { URLSearchParams } = require('url'); // Added for robust URL encoding
 
 // ---------------- CONFIG ----------------
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -18,13 +19,14 @@ const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531
 const GROUP_JOIN_LINK = process.env.GROUP_JOIN_LINK || 'https://t.me/+3TSyKHmwOvRmNDJl';
 
 // --- CUSTOM LIMITS ---
-const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '2', 10); // Changed from 1 to 2
+const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '2', 10);
 const BONUS_TRIAL_LIMIT = 5; // New limit for "Get Free Access"
 const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
 const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
 
-// --- FREE ACCESS API ---
-const FREE_ACCESS_URL_API = 'https://vplink.in/api?api=9c06662a8be6f2fc0aff86f302586f967fe917bb&url=https://t.me/infotrac_bot&alias=inforaalise';
+// --- FREE ACCESS API CONFIG ---
+const FREE_ACCESS_API_TOKEN = '9c06662a8be6f2fc0aff86f302586f967fe917bb';
+const FREE_ACCESS_API_BASE_URL = 'https://vplink.in/api';
 const PAYMENT_CONTACT = '@zecboy';
 
 const API_CONFIG = {
@@ -322,13 +324,24 @@ bot.action('try_num', (ctx) => {
 bot.action('free_access_link', async (ctx) => {
     await ctx.answerCbQuery('Generating free access link...');
     try {
-        const url = FREE_ACCESS_URL_API;
-        const res = await axios.get(url, { timeout: 10000 });
+        // Construct the redirect URL back to the bot with a token/start parameter
+        const longUrl = `https://t.me/infotrac_bot?start=token=${ctx.from.id}`;
+        
+        // Build the query parameters for the link shortening API
+        const params = new URLSearchParams({
+            api: FREE_ACCESS_API_TOKEN,
+            url: longUrl,
+            alias: 'inforaalise'
+        });
 
+        // Make the GET request
+        const url = `${FREE_ACCESS_API_BASE_URL}?${params.toString()}`;
+        const res = await axios.get(url, { timeout: 10000 });
+        
+        // Check for the expected JSON response structure
         if (res.data && res.data.status === 'success' && res.data.shortenedUrl) {
             const shortUrl = res.data.shortenedUrl;
             
-            // Assuming the shortened URL will redirect back to the bot with a token/start parameter
             const message = `🔗 *CLICK BELOW TO ACTIVATE 5 FREE SEARCHES\\!* (This will redirect you back to the bot)\n\n*Link:* ${escapeMdV2(shortUrl)}`;
             
             const keyboard = Markup.inlineKeyboard([
@@ -336,8 +349,10 @@ bot.action('free_access_link', async (ctx) => {
             ]);
 
             await ctx.reply(message, { parse_mode: 'MarkdownV2', reply_markup: keyboard.reply_markup, disable_web_page_preview: true });
+        } else if (res.data && res.data.status === 'error') {
+             await ctx.reply(`❌ Link API Error: ${escapeMdV2(res.data.message)}\\. Try again or use *Add Payment*\\\\.`, { parse_mode: 'MarkdownV2' });
         } else {
-             await ctx.reply('❌ Failed to generate free access link\\. Please try again or contact support\\.', { parse_mode: 'MarkdownV2' });
+             await ctx.reply('❌ Failed to generate free access link \\(Unknown response\\)\\. Please try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
         }
     } catch (err) {
         console.error('Free access API error:', err.message);
