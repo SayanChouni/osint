@@ -31,7 +31,7 @@ const SEARCH_COOLDOWN_MS = parseInt(
 );
 
 // FREE ACCESS API
-const FREE_ACCESS_API_TOKEN = '9c06662a8be6f2fc0aff86f302586f917bb';
+const FREE_ACCESS_API_TOKEN = '9c06662a8be6f2fc0aff86f302586f967fe917bb';
 const FREE_ACCESS_API_BASE_URL = 'https://vplink.in/api';
 const PAYMENT_CONTACT = '@zecboy';
 
