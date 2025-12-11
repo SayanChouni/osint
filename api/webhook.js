@@ -4,7 +4,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
 const { MongoClient } = require('mongodb');
-const { URLSearchParams } = require('url');
+// const { URLSearchParams } = require('url'); // Not needed if API call is removed
 
 // ---------------- CONFIG ----------------
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -24,9 +24,9 @@ const BONUS_TRIAL_LIMIT = 5; // New limit for "Get Free Access"
 const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
 const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
 
-// --- FREE ACCESS API CONFIG ---
-const FREE_ACCESS_API_TOKEN = '9c06662a8be6f2fc0aff86f302586f967fe917bb';
-const FREE_ACCESS_API_BASE_URL = 'https://vplink.in/api';
+// --- FREE ACCESS CONFIG ---
+// Only using the static shortened URL now
+const STATIC_FREE_ACCESS_LINK = 'https://vplink.in/inforaalise'; 
 const PAYMENT_CONTACT = '@zecboy';
 
 const API_CONFIG = {
@@ -226,7 +226,8 @@ bot.use(async (ctx, next) => {
         
         const rechargeKb = Markup.inlineKeyboard([
              [Markup.button.url('💳 ADD PAYMENT', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)],
-             [Markup.button.callback('🆓 GET FREE ACCESS (5 Searches)', 'free_access_link')]
+             // Changed from Markup.button.callback to Markup.button.url with the static link
+             [Markup.button.url('🆓 GET FREE ACCESS (5 Searches)', STATIC_FREE_ACCESS_LINK)] 
         ]);
         
         return ctx.reply(msg, rechargeKb);
@@ -320,56 +321,13 @@ bot.action('try_num', (ctx) => {
   ctx.reply('To search a number use: /num <phone>');
 });
 
-// --- NEW ACTION HANDLER FOR FREE ACCESS ---
-bot.action('free_access_link', async (ctx) => {
-    await ctx.answerCbQuery('Generating free access link...');
-    try {
-        // FIX: Replaced =token= with =token_ to avoid double equal signs (==) and URL parsing issues.
-        const longUrl = `https://t.me/infotrac_bot?start=token_${ctx.from.id}`;
-        
-        // Build the query parameters for the link shortening API
-        const params = new URLSearchParams({
-            api: FREE_ACCESS_API_TOKEN,
-            url: longUrl,
-            alias: 'inforaalise' // Keeping manual alias as per previous request
-        });
+// --- REMOVED ACTION HANDLER FOR FREE ACCESS API CALL ---
+// The inline button is now a URL button, so this action is not needed.
 
-        // Make the GET request
-        const url = `${FREE_ACCESS_API_BASE_URL}?${params.toString()}`;
-        // Increased timeout to 20 seconds
-        const res = await axios.get(url, { timeout: 20000 }); 
-        
-        // Check for the expected JSON response structure
-        if (res.data && res.data.status === 'success' && res.data.shortenedUrl) {
-            const shortUrl = res.data.shortenedUrl;
-            
-            const message = `🔗 *CLICK BELOW TO ACTIVATE 5 FREE SEARCHES\\!* (This will redirect you back to the bot)\n\n*Link:* ${escapeMdV2(shortUrl)}`;
-            
-            const keyboard = Markup.inlineKeyboard([
-                [Markup.button.url('➡️ GET FREE ACCESS', shortUrl)]
-            ]);
-
-            await ctx.reply(message, { parse_mode: 'MarkdownV2', reply_markup: keyboard.reply_markup, disable_web_page_preview: true });
-        } else if (res.data && res.data.status === 'error') {
-             // Escaping error message from API response
-             const errorMessage = escapeMdV2(res.data.message || 'API error message is missing.');
-             await ctx.reply(`❌ Link API Error: ${errorMessage}\\. Try again or use *Add Payment*\\\\.`, { parse_mode: 'MarkdownV2' });
-        } else {
-             await ctx.reply('❌ Failed to generate free access link \\(Unknown response\\)\\. Please try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
-        }
-    } catch (err) {
-        // Log the actual error
-        console.error('Free access API error:', err.message);
-        
-        // User-facing message: specifically mention timeout if applicable, otherwise general error.
-        const userMsg = err.code === 'ECONNABORTED' || err.message.includes('timeout') 
-                        ? '❌ Timeout\\. The link generator is slow\\. Please try again in 30 seconds or use *Add Payment*\\.'
-                        : '❌ API Error during link generation\\. Try again or use *Add Payment*\\.';
-
-        await ctx.reply(userMsg, { parse_mode: 'MarkdownV2' });
-    }
-});
-
+// --- NOTE: If the user clicks the static URL, they will be redirected. 
+// If the URL shortener successfully redirects them back to the bot with 
+// the correct /start?start=token_USERID payload, the logic in bot.start 
+// will activate the bonus searches.
 
 // ---------------- HELP / BALANCE ----------------
 bot.command('balance', async (ctx) => {
