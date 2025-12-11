@@ -368,22 +368,23 @@ bot.action('free_access_link', async (ctx) => {
         // Log the actual error
         console.error('Free access API error:', err.message);
         
-        // Fallback keyboard with "Add Payment"
+        // FIX START: Ensure MarkdownV2 error messages are properly escaped and reply keyboard is provided.
         const rechargeKb = Markup.inlineKeyboard([
             [Markup.button.url('💳 ADD PAYMENT', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)]
         ]);
 
         let userMsg;
         if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
-            // Ensure the message is escaped if we use MarkdownV2
+            // Message is now escaped
             userMsg = escapeMdV2('❌ Timeout. The link generator is slow. Please try again in 30 seconds or use Add Payment.');
         } else {
-            // The first error message mentioned by the user, now escaped.
+            // Message is now escaped
             userMsg = escapeMdV2('❌ API Error during link generation. Please try again or use Add Payment.');
         }
         
-        // Use MarkdownV2 to ensure the message is correctly displayed with the proper escaping.
+        // Use MarkdownV2 explicitly for the escaped message and include the fallback keyboard.
         await ctx.reply(userMsg, { parse_mode: 'MarkdownV2', reply_markup: rechargeKb.reply_markup });
+        // FIX END
     }
 });
 
