@@ -162,10 +162,9 @@ async function sendAdminFile(ctx, filename, obj, caption) {
 // ---------------- MIDDLEWARE ----------------
 bot.use(async (ctx, next) => {
   const text = ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
-  // Removed activate5, handled by /start
   const isCmd = text && /^\/(num|balance|donate|support|buyapi|admin|status)\b/.test(text); 
 
-  if (text.startsWith('/start')) return next(); // Allow /start to pass through for special handling
+  if (text.startsWith('/start')) return next(); 
 
   const chatType = ctx.chat && ctx.chat.type ? ctx.chat.type : 'private';
   if (isCmd && chatType !== 'private') {
@@ -312,8 +311,15 @@ bot.action('get_free_access', async (ctx) => {
     const response = await axios.get(VPLINK_API_URL, { timeout: 10000 });
     const redirectLink = response.data.trim();
 
+    // Check 1: Ensure the link is not empty
+    if (!redirectLink) {
+      throw new Error('VPLINK API returned an empty response.');
+    }
+
+    // Check 2: Ensure the link starts with the expected base URL (vplink)
     if (!redirectLink.startsWith(VPLINK_BASE_URL)) {
-      throw new Error('Invalid link structure received from VPLINK API.');
+      // If it fails, log the actual response for debugging
+      throw new Error(`Invalid link structure received: ${redirectLink}`); 
     }
 
     // Send the user the link to complete the free access step
@@ -329,8 +335,12 @@ bot.action('get_free_access', async (ctx) => {
 
   } catch (err) {
     console.error('Free access API fetch error:', err.message);
-    // Added a specific error message for the VPLINK failure
-    await ctx.reply('❌ Failed to generate free access link\\. API Error: Please try again later\\.', { parse_mode: 'MarkdownV2' });
+    
+    // Get the error message and make it MarkdownV2 safe
+    const rawErrorMessage = err.message || 'Unknown network error.';
+    const displayMessage = rawErrorMessage.includes('400') ? 'VPLINK API rejected the request (Configuration error).' : rawErrorMessage;
+
+    await ctx.reply(`❌ API Error: Failed to generate free access link\\.\nError: ${escapeMdV2(displayMessage)}\\.`, { parse_mode: 'MarkdownV2' });
   }
 });
 
