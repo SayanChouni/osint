@@ -17,16 +17,21 @@ const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USE
 const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531';
 const GROUP_JOIN_LINK = process.env.GROUP_JOIN_LINK || 'https://t.me/+3TSyKHmwOvRmNDJl';
 
-const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '1', 10);
+// --- CUSTOM LIMITS ---
+const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '2', 10); // Changed from 1 to 2
+const BONUS_TRIAL_LIMIT = 5; // New limit for "Get Free Access"
 const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
 const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
 
+// --- FREE ACCESS API ---
+const FREE_ACCESS_URL_API = 'https://vplink.in/api?api=9c06662a8be6f2fc0aff86f302586f967fe917bb&url=https://t.me/infotrac_bot&alias=inforaalise';
+const PAYMENT_CONTACT = '@zecboy';
+
 const API_CONFIG = {
-  // Keeping the original structure but setting the same API key for consistency
-  // NOTE: You explicitly requested NOT to use this one in search logic, but configuration must exist.
+  // NAME_FINDER configuration is still here, but we won't call it in /num
   NAME_FINDER: process.env.APISUITE_NAMEFINDER || 'https://m.apisuite.in/?api=namefinder&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number=',
-  // API key and URL structure updated as per user request
-  AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://m.apisuite.in/?api=number-to-aadhaar&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number='
+  // AADHAAR_FINDER API URL changed as requested
+  AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://nixonsmmapi.s77134867.workers.dev/?mobile='
 };
 
 let MAINTENANCE_MODE = (process.env.MAINTENANCE_MODE === '1');
@@ -113,10 +118,16 @@ async function getUserData(userId) {
       is_suspended: false,
       role: (userId === ADMIN_USER_ID ? 'admin' : 'user'),
       admin_state: null,
-      last_search_ts: 0
+      last_search_ts: 0,
+      bonus_search_count: 0 // New field for free access searches
     };
     await usersCollection.insertOne(newUser);
     return newUser;
+  }
+  // Ensure the new field exists if the user is old
+  if (user.bonus_search_count === undefined) {
+     await usersCollection.updateOne({ _id: userId }, { $set: { bonus_search_count: 0 } });
+     user.bonus_search_count = 0;
   }
   return user;
 }
@@ -203,20 +214,51 @@ bot.use(async (ctx, next) => {
 
     // credits/trial
     if (user.role !== 'admin' && !/^\/(balance|donate|support|buyapi)\b/.test(text)) {
-      const isFree = user.search_count < FREE_TRIAL_LIMIT;
+      const isFreeTrial = user.search_count < FREE_TRIAL_LIMIT;
+      const isFreeBonus = user.bonus_search_count > 0;
       const hasBalance = user.balance >= COST_PER_SEARCH;
-      if (!isFree && !hasBalance) {
-        const msg = `⚠️ *INSUFFICIENT BALANCE\\!*\n\n*You used your ${FREE_TRIAL_LIMIT} free search\\.*\nRecharge to continue\\. Contact: @zecboy`;
-        return ctx.reply(msg, { parse_mode: 'MarkdownV2' });
+
+      if (!isFreeTrial && !isFreeBonus && !hasBalance) {
+        
+        const msg = `⚠️ *INSUFFICIENT BALANCE OR FREE USES ENDED\\!*\n\n*You used your ${FREE_TRIAL_LIMIT} free searches and ${BONUS_TRIAL_LIMIT} bonus searches\\.*\nRecharge to continue or get temporary free access.`;
+        
+        const rechargeKb = Markup.inlineKeyboard([
+             [Markup.button.url('💳 ADD PAYMENT', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)],
+             [Markup.button.callback('🆓 GET FREE ACCESS (5 Searches)', 'free_access_link')]
+        ]);
+        
+        return ctx.reply(msg, rechargeKb);
       }
 
-      // increment and deduct atomically
-      const updateOps = { $inc: { search_count: 1 } };
-      if (!isFree) updateOps.$inc = Object.assign(updateOps.$inc || {}, { balance: -COST_PER_SEARCH });
+      // Determine cost deduction and counter update
+      const updateOps = { $inc: {} };
+      let cost = 0;
+      let usedFreeType = '';
+
+      if (isFreeBonus) {
+        // Use bonus search first
+        updateOps.$inc.bonus_search_count = -1;
+        usedFreeType = 'Bonus';
+      } else if (isFreeTrial) {
+        // Use initial free trial
+        updateOps.$inc.search_count = 1;
+        cost = 0;
+        usedFreeType = 'Trial';
+      } else {
+        // Use paid balance
+        updateOps.$inc.search_count = 1;
+        updateOps.$inc.balance = -COST_PER_SEARCH;
+        cost = COST_PER_SEARCH;
+        usedFreeType = 'Paid';
+      }
+      
       await usersCollection.updateOne({ _id: ctx.from.id }, updateOps);
       const updated = await usersCollection.findOne({ _id: ctx.from.id });
+      
       const freeLeft = Math.max(0, FREE_TRIAL_LIMIT - updated.search_count);
-      await ctx.reply(`💳 *Transaction processed\\.* COST: ${isFree ? '0' : COST_PER_SEARCH} TK\\. BALANCE: ${escapeMdV2(String(updated.balance))} TK\\. FREE LEFT: ${freeLeft}\\.`, { parse_mode: 'MarkdownV2' });
+      const bonusLeft = Math.max(0, updated.bonus_search_count);
+
+      await ctx.reply(`💳 *Transaction processed\\.* TYPE: ${usedFreeType}\\. COST: ${cost} TK\\. BALANCE: ${escapeMdV2(String(updated.balance))} TK\\. FREE LEFT: ${freeLeft}\\. BONUS LEFT: ${bonusLeft}\\.`, { parse_mode: 'MarkdownV2' });
     }
   }
 
@@ -246,8 +288,22 @@ bot.start(async (ctx) => {
 
   const keyboard = Markup.inlineKeyboard([
     [Markup.button.callback('🔎 Try /num', 'try_num')],
-    [Markup.button.url('💳 Buy Credits', 'https://t.me/zecboy'), Markup.button.url('📩 Contact Owner', 'https://t.me/zecboy')]
+    [Markup.button.url('💳 Buy Credits', `https://t.me/${PAYMENT_CONTACT.substring(1)}`), Markup.button.url('📩 Contact Owner', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)]
   ]);
+  
+  // Handle /start?token=X (assuming this is how vplink will redirect back)
+  const startPayload = ctx.message.text.split(' ')[1] || '';
+  const isTokenActivated = startPayload.includes('token=');
+  
+  if (isTokenActivated) {
+    // Grant 5 bonus searches (regardless of what the token actually is, as per request)
+    await usersCollection.updateOne({ _id: ctx.from.id }, { $set: { bonus_search_count: BONUS_TRIAL_LIMIT } }, { upsert: true });
+    
+    // Send success message and initial start message
+    await ctx.reply('✅ *TOKEN ACTIVATED\\!* You have received 5 bonus searches\\.', { parse_mode: 'MarkdownV2' });
+    await ctx.reply(startMd, { parse_mode: 'MarkdownV2', disable_web_page_preview: true, ...{} });
+    return;
+  }
 
   if (member) {
     return ctx.reply(startMd, { parse_mode: 'MarkdownV2', disable_web_page_preview: true, ...{} });
@@ -262,19 +318,51 @@ bot.action('try_num', (ctx) => {
   ctx.reply('To search a number use: /num <phone>');
 });
 
+// --- NEW ACTION HANDLER FOR FREE ACCESS ---
+bot.action('free_access_link', async (ctx) => {
+    await ctx.answerCbQuery('Generating free access link...');
+    try {
+        const url = FREE_ACCESS_URL_API;
+        const res = await axios.get(url, { timeout: 10000 });
+
+        if (res.data && res.data.status === 'success' && res.data.shortenedUrl) {
+            const shortUrl = res.data.shortenedUrl;
+            
+            // Assuming the shortened URL will redirect back to the bot with a token/start parameter
+            const message = `🔗 *CLICK BELOW TO ACTIVATE 5 FREE SEARCHES\\!* (This will redirect you back to the bot)\n\n*Link:* ${escapeMdV2(shortUrl)}`;
+            
+            const keyboard = Markup.inlineKeyboard([
+                [Markup.button.url('➡️ GET FREE ACCESS', shortUrl)]
+            ]);
+
+            await ctx.reply(message, { parse_mode: 'MarkdownV2', reply_markup: keyboard.reply_markup, disable_web_page_preview: true });
+        } else {
+             await ctx.reply('❌ Failed to generate free access link\\. Please try again or contact support\\.', { parse_mode: 'MarkdownV2' });
+        }
+    } catch (err) {
+        console.error('Free access API error:', err.message);
+        await ctx.reply('❌ API Error during link generation\\. Try again or use *Add Payment*\\.', { parse_mode: 'MarkdownV2' });
+    }
+});
+
+
 // ---------------- HELP / BALANCE ----------------
 bot.command('balance', async (ctx) => {
   const user = await getUserData(ctx.from.id);
   const freeLeft = Math.max(0, FREE_TRIAL_LIMIT - user.search_count);
-  return ctx.reply(`💰 *BALANCE:* ${escapeMdV2(String(user.balance))} TK\n*FREE USES LEFT:* ${freeLeft}`, { parse_mode: 'MarkdownV2' });
+  const bonusLeft = Math.max(0, user.bonus_search_count);
+
+  return ctx.reply(`💰 *BALANCE:* ${escapeMdV2(String(user.balance))} TK\n*FREE USES LEFT (Trial):* ${freeLeft}\n*FREE USES LEFT (Bonus):* ${bonusLeft}`, { parse_mode: 'MarkdownV2' });
 });
 
-bot.command(['donate','support','buyapi'], (ctx) => ctx.reply('✨ SUPPORT: DM @zecboy', { parse_mode: 'MarkdownV2' }));
+bot.command(['donate','support','buyapi'], (ctx) => ctx.reply(`✨ SUPPORT: DM ${PAYMENT_CONTACT}`, { parse_mode: 'MarkdownV2' }));
 
 // ---------------- FORMAT & SEND STYLED RESULT (Option A) ----------------
 async function sendPremiumNumberResult(ctx, apiResultObj, phone, userId) {
   // apiResultObj follows your sample: { status: 'success', data: [ { ... } ] }
   const rec = (apiResultObj && Array.isArray(apiResultObj.data) && apiResultObj.data[0]) ? apiResultObj.data[0] : {};
+  
+  // The new API response might use different keys, but we rely on your sample structure for mapping
   const name = escapeMdV2(rec.name || rec.NAME || rec.full_name || 'N/A');
   const father = escapeMdV2(rec.father_name || rec.father || 'N/A');
   const mobile = escapeMdV2(rec.mobile || phone || 'N/A');
@@ -297,7 +385,7 @@ async function sendPremiumNumberResult(ctx, apiResultObj, phone, userId) {
     `*🌐 Circle:* ${circle}`,
     '',
     `*🏡 Address:*`,
-    // Fix: Ensure addressRaw is escaped if addressPretty is empty (addresses the "Character '!' issue)
+    // Fix: Ensure addressRaw is escaped if addressPretty is empty
     `${addressPretty || escapeMdV2(String(addressRaw || 'N/A'))}`,
     '',
     `*📮 Pincode:* ${escapeMdV2(String(pincode || 'N/A'))}`,
@@ -349,40 +437,64 @@ bot.command('num', async (ctx) => {
 
   // ------------------ MODIFIED LOGIC: ONLY CALL AADHAAR API ------------------
   try {
+    // API CONFIG key changed to 'mobile=' format, but we keep the structure here.
     const aadhaarUrl = `${API_CONFIG.AADHAAR_FINDER}${encodeURIComponent(phone)}`;
 
     // Only call the AADHAAR API
-    const aadhaarRes = await axios.get(aadhaarUrl, { timeout: 15000 });
-
-    let combined = { status: 'success', data: [] };
+    const res = await axios.get(aadhaarUrl, { timeout: 15000 });
     
-    if (aadhaarRes.data && Array.isArray(aadhaarRes.data.data)) {
-        combined = aadhaarRes.data;
-    } else if (aadhaarRes.data) {
-        // Handle cases where the top-level is the data structure itself (less likely but safer)
-        combined = aadhaarRes.data;
+    // We assume the response data is the object containing 'status' and 'data' array
+    const responseData = res.data;
+    
+    let combined = { status: 'failed', data: [ { error: 'No data from API' } ] };
+    
+    // Check for success status and valid data array
+    if (responseData && responseData.status === 'success' && Array.isArray(responseData.data)) {
+        combined = responseData;
     } else {
-        combined = { status: 'failed', data: [ { error: 'No data from API' } ] };
+        // If the API returns data but not in the expected format, log it.
+        console.error('API returned non-standard/failed response:', JSON.stringify(responseData));
+        combined = responseData || { status: 'failed', data: [ { error: 'API returned non-standard data.' } ] };
     }
 
     // send premium formatted message
     await sendPremiumNumberResult(ctx, combined, phone, ctx.from.id);
 
     // log search
+    const userUpdated = await usersCollection.findOne({ _id: ctx.from.id });
+    const isFree = (userUpdated.search_count <= FREE_TRIAL_LIMIT && userUpdated.search_count > 0 && userUpdated.balance <= 0) || userUpdated.bonus_search_count < BONUS_TRIAL_LIMIT;
+
     await logSearch({
       user_id: ctx.from.id,
       phone,
       result_summary: {
-        // name_status is now irrelevant
-        aadhaar_status: 'fulfilled' 
+        aadhaar_status: combined.status
       },
-      cost: (user.search_count <= FREE_TRIAL_LIMIT ? 0 : COST_PER_SEARCH),
+      cost: isFree ? 0 : COST_PER_SEARCH,
       blocked: false
     });
 
   } catch (err) {
     console.error('num command error:', err.message);
+    
     // Log API failure
+    const userUpdated = await usersCollection.findOne({ _id: ctx.from.id });
+    const isFree = (userUpdated.search_count <= FREE_TRIAL_LIMIT && userUpdated.search_count > 0 && userUpdated.balance <= 0) || userUpdated.bonus_search_count < BONUS_TRIAL_LIMIT;
+    
+    // Reverse the counter/balance deduction since the search failed due to API error
+    const reverseOps = { $inc: {} };
+    if (userUpdated.bonus_search_count < BONUS_TRIAL_LIMIT && userUpdated.bonus_search_count >= 0) {
+      reverseOps.$inc.bonus_search_count = 1; // Increment bonus back
+    } else if (userUpdated.search_count > 0 && userUpdated.search_count <= FREE_TRIAL_LIMIT) {
+      reverseOps.$inc.search_count = -1; // Decrement trial back
+    } else if (userUpdated.balance < 0) {
+      reverseOps.$inc.balance = COST_PER_SEARCH; // Add money back
+    }
+    
+    if (Object.keys(reverseOps.$inc).length > 0) {
+        await usersCollection.updateOne({ _id: ctx.from.id }, reverseOps);
+    }
+    
     await logSearch({
       user_id: ctx.from.id,
       phone,
@@ -390,9 +502,10 @@ bot.command('num', async (ctx) => {
         aadhaar_status: 'failed',
         error: err.message
       },
-      cost: (user.search_count <= FREE_TRIAL_LIMIT ? 0 : COST_PER_SEARCH),
+      cost: isFree ? 0 : COST_PER_SEARCH,
       blocked: false
     });
+    
     return ctx.reply('❌ API error\\. Please try again later\\.', { parse_mode: 'MarkdownV2' });
   }
 });
@@ -408,7 +521,8 @@ bot.command('admin', adminOnly, async (ctx) => {
     [Markup.button.callback('➕ ADD CREDIT', 'admin_add_credit'), Markup.button.callback('➖ REMOVE CREDIT', 'admin_remove_credit')],
     [Markup.button.callback('🛑 SUSPEND USER', 'admin_suspend'), Markup.button.callback('🟢 UNBAN USER', 'admin_unban')],
     [Markup.button.callback('👤 CHECK STATUS', 'admin_status'), Markup.button.callback('📝 VIEW LOGS', 'admin_view_logs')],
-    [Markup.button.callback('🔒 ADD BLOCK', 'admin_add_block'), Markup.button.callback('🔓 REMOVE BLOCK', 'admin_remove_block')]
+    [Markup.button.callback('🔒 ADD BLOCK', 'admin_add_block'), Markup.button.callback('🔓 REMOVE BLOCK', 'admin_remove_block')],
+    [Markup.button.callback('➕ ADD BONUS SEARCHES', 'admin_add_bonus_search')] // New admin command
   ]);
   return ctx.reply('*Admin Panel*', { parse_mode: 'MarkdownV2', reply_markup: kb.reply_markup });
 });
@@ -426,6 +540,7 @@ bot.action(/admin_(.+)/, adminOnly, async (ctx) => {
     case 'view_logs': await ctx.reply('VIEW LOGS MODE\nFormat: number (how many recent logs) Example: 10'); break;
     case 'add_block': await ctx.reply('ADD BLOCK MODE\nFormat: phone Example: 7047997398'); break;
     case 'remove_block': await ctx.reply('REMOVE BLOCK MODE\nFormat: phone Example: 7047997398'); break;
+    case 'add_bonus_search': await ctx.reply('ADD BONUS SEARCH MODE\nFormat: UserID Amount\nExample: 123456789 5'); break; // New admin action
     default: await ctx.reply('Unknown admin action'); break;
   }
   await ctx.answerCbQuery();
@@ -450,6 +565,13 @@ bot.on('text', async (ctx, next) => {
       const delta = state === 'add_credit' ? amount : -amount;
       await usersCollection.updateOne({ _id: targetId }, { $inc: { balance: delta } }, { upsert: true });
       await ctx.reply(`SUCCESS: ${Math.abs(amount)} TK ${state === 'add_credit' ? 'ADDED TO' : 'REMOVED FROM'} USER ${targetId}`, { parse_mode: 'MarkdownV2' });
+    } else if (state === 'add_bonus_search') {
+      if (parts.length !== 2) return ctx.reply('INVALID FORMAT\\. Use: UserID Amount', { parse_mode: 'MarkdownV2' });
+      const targetId = parseInt(parts[0], 10);
+      const amount = parseInt(parts[1], 10);
+      if (!targetId || isNaN(amount)) return ctx.reply('INVALID FORMAT\\. Use: UserID Amount', { parse_mode: 'MarkdownV2' });
+      await usersCollection.updateOne({ _id: targetId }, { $inc: { bonus_search_count: amount } }, { upsert: true });
+      await ctx.reply(`SUCCESS: ${amount} BONUS SEARCHES ADDED TO USER ${targetId}`, { parse_mode: 'MarkdownV2' });
     } else if (state === 'suspend' || state === 'unban') {
       if (parts.length !== 1) return ctx.reply('INVALID FORMAT\\. Use: UserID', { parse_mode: 'MarkdownV2' });
       const targetId = parseInt(parts[0], 10);
