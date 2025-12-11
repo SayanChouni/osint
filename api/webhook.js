@@ -26,6 +26,7 @@ const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10
 
 // --- FREE ACCESS CONFIG ---
 // Only using the static shortened URL now
+// NOTE: This URL must redirect to the bot with a payload like ?start=token_USERID for activation to work.
 const STATIC_FREE_ACCESS_LINK = 'https://vplink.in/inforaalise'; 
 const PAYMENT_CONTACT = '@zecboy';
 
@@ -294,13 +295,16 @@ bot.start(async (ctx) => {
     [Markup.button.url('💳 Buy Credits', `https://t.me/${PAYMENT_CONTACT.substring(1)}`), Markup.button.url('📩 Contact Owner', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)]
   ]);
   
-  // Handle /start?token=X (assuming this is how vplink will redirect back)
-  const startPayload = ctx.message.text.split(' ')[1] || '';
+  // Handle /start?payload (payload is everything after /start )
+  const fullCommand = ctx.message.text.trim();
+  const startPayload = fullCommand.split(/\s+/).slice(1).join(' ').trim(); // Get all text after /start
   const isTokenActivated = startPayload.startsWith('token_'); // Checking for the fixed pattern
   
+  // Logic Fix: Check if the payload is present and starts with token_
   if (isTokenActivated) {
-    // Grant 5 bonus searches (regardless of what the token actually is, as per request)
-    await usersCollection.updateOne({ _id: ctx.from.id }, { $set: { bonus_search_count: BONUS_TRIAL_LIMIT } }, { upsert: true });
+    // Grant 5 bonus searches 
+    const targetUserId = ctx.from.id; // Activation is always for the user sending the command
+    await usersCollection.updateOne({ _id: targetUserId }, { $set: { bonus_search_count: BONUS_TRIAL_LIMIT } }, { upsert: true });
     
     // Send success message and initial start message
     await ctx.reply('✅ *TOKEN ACTIVATED\\!* You have received 5 bonus searches\\.', { parse_mode: 'MarkdownV2' });
@@ -308,6 +312,7 @@ bot.start(async (ctx) => {
     return;
   }
 
+  // Normal start response
   if (member) {
     return ctx.reply(startMd, { parse_mode: 'MarkdownV2', disable_web_page_preview: true, ...{} });
   } else {
@@ -321,13 +326,7 @@ bot.action('try_num', (ctx) => {
   ctx.reply('To search a number use: /num <phone>');
 });
 
-// --- REMOVED ACTION HANDLER FOR FREE ACCESS API CALL ---
-// The inline button is now a URL button, so this action is not needed.
-
-// --- NOTE: If the user clicks the static URL, they will be redirected. 
-// If the URL shortener successfully redirects them back to the bot with 
-// the correct /start?start=token_USERID payload, the logic in bot.start 
-// will activate the bonus searches.
+// --- REMOVED ACTION HANDLER FOR FREE ACCESS API CALL (since it's now a direct URL) ---
 
 // ---------------- HELP / BALANCE ----------------
 bot.command('balance', async (ctx) => {
@@ -432,7 +431,7 @@ bot.command('num', async (ctx) => {
     let combined = { status: 'failed', data: [ { error: 'No data from API' } ] };
     
     // Check for success status and valid data array
-    if (responseData && responseData.status === 'success' && Array.isArray(responseData.data)) {
+    if (responseData && responseData.status === 'success' && ArrayArray(responseData.data)) {
         combined = responseData;
     } else {
         // If the API returns data but not in the expected format, log it.
