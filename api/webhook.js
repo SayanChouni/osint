@@ -226,7 +226,7 @@ bot.use(async (ctx, next) => {
         
         const rechargeKb = Markup.inlineKeyboard([
              [Markup.button.url('💳 ADD PAYMENT', `https://t.me/${PAYMENT_CONTACT.substring(1)}`)],
-             // Changed back to callback button
+             // Changed back to callback button to trigger dynamic link generation
              [Markup.button.callback('🆓 GET FREE ACCESS (5 Searches)', 'free_access_link')] 
         ]);
         
@@ -299,7 +299,7 @@ bot.start(async (ctx) => {
   const startPayload = fullCommand.split(/\s+/).slice(1).join(' ').trim(); // Get all text after /start
   const isTokenActivated = startPayload.startsWith('token_'); // Checking for the fixed pattern
   
-  // Logic Fix: Check if the payload is present and starts with token_
+  // Logic: Check if the payload is present and starts with token_
   if (isTokenActivated) {
     // Grant 5 bonus searches 
     const targetUserId = ctx.from.id; // Activation is always for the user sending the command
@@ -325,7 +325,7 @@ bot.action('try_num', (ctx) => {
   ctx.reply('To search a number use: /num <phone>');
 });
 
-// --- NEW ACTION HANDLER FOR FREE ACCESS (Reverted back to API call) ---
+// --- NEW ACTION HANDLER FOR FREE ACCESS (Dynamic API call) ---
 bot.action('free_access_link', async (ctx) => {
     await ctx.answerCbQuery('Generating free access link...');
     try {
@@ -376,6 +376,7 @@ bot.action('free_access_link', async (ctx) => {
              await ctx.reply('❌ Timeout. The link generator is slow. Please try again in 30 seconds or use Add Payment.');
         } else {
              // Sending general error in Plain Text (REMOVED parse_mode: 'MarkdownV2')
+             // This is the CRITICAL FIX for the 400 Bad Request error
              await ctx.reply(userMsg); 
         }
     }
