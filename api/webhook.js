@@ -1,5 +1,5 @@
 // FILE: index.js
-// INFORA-PRO — final single-file bot (with AroLinks Token Activation Logic)
+// INFORA-PRO — final single-file bot (with VPLink.in Token Activation Logic)
 
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
@@ -13,7 +13,7 @@ const DB_NAME = process.env.DB_NAME || 'osint_user_db';
 const USERS_COL = process.env.COLLECTION_NAME || 'users';
 const LOGS_COL = process.env.LOGS_COLLECTION || 'search_logs';
 const BLOCKED_COL = process.env.BLOCKED_COLLECTION || 'blocked_numbers';
-const TOKENS_COL = 'activation_tokens'; // ✅ New collection for activation tokens
+const TOKENS_COL = 'activation_tokens'; // ✅ Collection for activation tokens
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID, 10) : null;
 
 const MANDATORY_CHANNEL_ID = process.env.MANDATORY_CHANNEL_ID || '-1002516081531';
@@ -23,14 +23,13 @@ const FREE_TRIAL_LIMIT = parseInt(process.env.FREE_TRIAL_LIMIT || '1', 10);
 const COST_PER_SEARCH = parseInt(process.env.COST_PER_SEARCH || '2', 10);
 const SEARCH_COOLDOWN_MS = parseInt(process.env.SEARCH_COOLDOWN_MS || '2000', 10);
 
-const AROLINKS_API_TOKEN = process.env.AROLINKS_API_TOKEN || 'bf355d1dcd7d29f8fecbb98d7785ade41ca1df51'; // ✅ AroLinks Token
-const FREE_CREDIT_AMOUNT = 5; // ✅ Credit to be awarded upon token activation
+// ✅ UPDATED: Using VPLink API Token and URL structure
+const VPLINK_API_TOKEN = process.env.VPLINK_API_TOKEN || '9c06662a8be6f2fc0aff86f302586f967fe917bb'; // VPLink Token
+const FREE_CREDIT_AMOUNT = 5; // Credit to be awarded upon token activation
 
 const API_CONFIG = {
   // Keeping the original structure but setting the same API key for consistency
-  // NOTE: You explicitly requested NOT to use this one in search logic, but configuration must exist.
   NAME_FINDER: process.env.APISUITE_NAMEFINDER || 'https://m.apisuite.in/?api=namefinder&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number=',
-  // API key and URL structure updated as per user request
   AADHAAR_FINDER: process.env.APISUITE_AADHAAR || 'https://m.apisuite.in/?api=number-to-aadhaar&api_key=a5cd2d1b9800cccb42c216a20ed1eb33&number='
 };
 
@@ -323,7 +322,7 @@ bot.action('generate_free_link', async (ctx) => {
     await ctx.answerCbQuery('Generating your free link...');
     const userId = ctx.from.id;
 
-    // AroLinks API configuration (already defined in CONFIG block)
+    // VPLink API configuration (already defined in CONFIG block)
     const BOT_USERNAME = ctx.botInfo.username; 
     
     // 1. Token Generation 
@@ -343,26 +342,25 @@ bot.action('generate_free_link', async (ctx) => {
         });
 
         // 2. Create the Telegram Deep Link (Final Destination URL)
-        // https://t.me/YourBotUsername?start=TOKEN
         const destinationUrl = `https://t.me/${BOT_USERNAME}?start=${token}`;
         const longUrlEncoded = encodeURIComponent(destinationUrl); 
 
-        // ✅ MODIFIED: Create a unique alias (required by your specified API format)
-        const uniqueAlias = `infota${userId}${token.slice(0, 6)}`; 
+        // ✅ UPDATED: Create a unique alias for VPLink
+        const uniqueAlias = `vpinfota${userId}${token.slice(0, 6)}`; 
 
-        // 3. AroLinks API Call with the CORRECTED structure and alias
-        // Structure: https://arolinks.com/api?api=...&url=...&alias=...&format=text
-        const apiUrl = `https://arolinks.com/api?api=${AROLINKS_API_TOKEN}&url=${longUrlEncoded}&alias=${uniqueAlias}&format=text`;
+        // 3. VPLink API Call with the CORRECTED structure
+        // Structure: https://vplink.in/api?api=...&url=...&alias=...&format=text
+        const apiUrl = `https://vplink.in/api?api=${VPLINK_API_TOKEN}&url=${longUrlEncoded}&alias=${uniqueAlias}&format=text`;
 
         const response = await axios.get(apiUrl, { timeout: 15000 });
-        const shortLink = response.data.trim(); // AroLinks returns plain text
+        const shortLink = response.data.trim(); // VPLink returns plain text
         
         if (shortLink && shortLink.startsWith('http')) {
              const message = `🎉 *CONGRATULATIONS\\!* 🎉\n\nClick on the link below to *activate your ${FREE_CREDIT_AMOUNT} Free Searches*\\.\n\n🔗 ${escapeMdV2(shortLink)}\n\n_Note: This link is valid for 1 hour only\\._`;
              await ctx.reply(message, { parse_mode: 'MarkdownV2', disable_web_page_preview: false });
         } else {
              await ctx.reply('❌ *Link Generation Failed\\!* Please try again later or contact support\\.', { parse_mode: 'MarkdownV2' });
-             console.error('AroLinks API failed during free link generation:', response.data);
+             console.error('VPLink API failed during free link generation:', response.data);
         }
 
     } catch (error) {
