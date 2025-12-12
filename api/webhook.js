@@ -227,8 +227,8 @@ bot.use(async (ctx, next) => {
         const msg = `⚠️ *INSUFFICIENT BALANCE\\!*\n\n*You used your ${FREE_TRIAL_LIMIT} free search\\.*\nRecharge to continue or get free searches now\\!`;
         
         const keyboard = Markup.inlineKeyboard([
-          [Markup.button.url('💳 ADD CREDIT', 'https://t.me/zecboy')], // @zecboy এ রিডাইরেক্ট হবে
-          [Markup.button.callback('🎁 GET FREE 5 SEARCHES', 'generate_free_link')] // নতুন অ্যাকশন কল হবে
+          [Markup.button.url('💳 ADD CREDIT', 'https://t.me/zecboy')], // @zecboy redirect
+          [Markup.button.callback('🎁 GET FREE 5 SEARCHES', 'generate_free_link')] // New action call
         ]);
         
         return ctx.reply(msg, { parse_mode: 'MarkdownV2', ...keyboard });
@@ -250,7 +250,7 @@ bot.use(async (ctx, next) => {
 
 // ---------------- START (MODIFIED FOR TOKEN) ----------------
 bot.start(async (ctx) => {
-  const payload = ctx.startPayload; // /start <token> থেকে token নেওয়া
+  const payload = ctx.startPayload; // Get token from /start <token>
   const userId = ctx.from.id;
   
   // --- 1. TOKEN ACTIVATION LOGIC ---
@@ -260,20 +260,20 @@ bot.start(async (ctx) => {
     const tokenDoc = await tokensCollection.findOne({ token: payload, activated: false });
     
     if (tokenDoc) {
-      // টোকেন বৈধ ও অ্যাক্টিভেট হয়নি
+      // Token is valid and not yet activated
       const credit = tokenDoc.credit_amount;
       
-      // ইউজারকে ক্রেডিট দেওয়া এবং টোকেন স্ট্যাটাস আপডেট করা
+      // Award credit and update token status
       await usersCollection.updateOne({ _id: userId }, { $inc: { balance: credit } }, { upsert: true });
       await tokensCollection.updateOne({ token: payload }, { $set: { activated: true, activated_by: userId, activated_at: new Date() } });
       
-      return ctx.reply(`✅ *YOUR TOKEN ACTIVATED\\!* 🥳\n\nআপনি সফলভাবে *${credit} TK* ক্রেডিট পেয়েছেন\\। আপনার নতুন ব্যালেন্স চেক করতে /balance লিখুন\\।`, { parse_mode: 'MarkdownV2' });
+      return ctx.reply(`✅ *YOUR TOKEN ACTIVATED\\!* 🥳\n\nYou have successfully received *${credit} TK* credit\\. Check your new balance with /balance\\.`, { parse_mode: 'MarkdownV2' }); // ✅ Translated
     } else if (await tokensCollection.findOne({ token: payload })) {
-      // টোকেনটি আগে ব্যবহার করা হয়েছে
-      return ctx.reply('⚠️ *TOKEN ALREADY USED\\!* এই টোকেনটি একবারের বেশি ব্যবহার করা যাবে না\\।', { parse_mode: 'MarkdownV2' });
+      // Token already used
+      return ctx.reply('⚠️ *TOKEN ALREADY USED\\!* This token can only be used once\\.', { parse_mode: 'MarkdownV2' }); // ✅ Translated
     } else {
-      // টোকেনটি পাওয়া যায়নি বা এক্সপায়ার হয়ে গেছে
-      return ctx.reply('❌ *INVALID OR EXPIRED TOKEN\\!* এই টোকেনটি অবৈধ অথবা এর মেয়াদ শেষ হয়ে গেছে\\।', { parse_mode: 'MarkdownV2' });
+      // Token not found or expired
+      return ctx.reply('❌ *INVALID OR EXPIRED TOKEN\\!* This token is invalid or has expired\\.', { parse_mode: 'MarkdownV2' }); // ✅ Translated
     }
   }
   // --- END TOKEN ACTIVATION LOGIC ---
@@ -332,7 +332,7 @@ bot.action('generate_free_link', async (ctx) => {
     
     try {
         const tokensCollection = await getTokensCollection();
-        // টোকেন ডাটাবেসে সেভ
+        // Save token to DB
         await tokensCollection.insertOne({
             token: token,
             user_id: userId,
