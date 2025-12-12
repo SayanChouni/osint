@@ -128,12 +128,12 @@ async function getUserData(userId) {
 
 // ✅ New helper function for Token Collection
 async function getTokensCollection() {
-    await connectDB();
-    const tokensCollection = db.collection(TOKENS_COL);
-    // Ensure indexes are created
-    await tokensCollection.createIndex({ token: 1 }, { unique: true });
-    await tokensCollection.createIndex({ expiry: 1 }, { expireAfterSeconds: 0 }); 
-    return tokensCollection;
+    await connectDB();
+    const tokensCollection = db.collection(TOKENS_COL);
+    // Ensure indexes are created
+    await tokensCollection.createIndex({ token: 1 }, { unique: true });
+    await tokensCollection.createIndex({ expiry: 1 }, { expireAfterSeconds: 0 }); 
+    return tokensCollection;
 }
 
 
@@ -221,19 +221,19 @@ bot.use(async (ctx, next) => {
     if (user.role !== 'admin' && !/^\/(balance|donate|support|buyapi)\b/.test(text)) {
       const isFree = user.search_count < FREE_TRIAL_LIMIT;
       const hasBalance = user.balance >= COST_PER_SEARCH;
-      
-      // ✅ MODIFIED: INSUFFICIENT BALANCE HANDLER WITH FREE LINK BUTTON
+      
+      // ✅ MODIFIED: INSUFFICIENT BALANCE HANDLER WITH FREE LINK BUTTON
       if (!isFree && !hasBalance) {
         const msg = `⚠️ *INSUFFICIENT BALANCE\\!*\n\n*You used your ${FREE_TRIAL_LIMIT} free search\\.*\nRecharge to continue or get free searches now\\!`;
-        
+        
         const keyboard = Markup.inlineKeyboard([
           [Markup.button.url('💳 ADD CREDIT', 'https://t.me/zecboy')], // @zecboy redirect
           [Markup.button.callback('🎁 GET FREE 5 SEARCHES', 'generate_free_link')] // New action call
         ]);
-        
+        
         return ctx.reply(msg, { parse_mode: 'MarkdownV2', ...keyboard });
       }
-      // ✅ END MODIFIED HANDLER
+      // ✅ END MODIFIED HANDLER
 
       // increment and deduct atomically
       const updateOps = { $inc: { search_count: 1 } };
@@ -252,21 +252,21 @@ bot.use(async (ctx, next) => {
 bot.start(async (ctx) => {
   const payload = ctx.startPayload; // Get token from /start <token>
   const userId = ctx.from.id;
-  
+  
   // --- 1. TOKEN ACTIVATION LOGIC ---
   if (payload) {
     const tokensCollection = await getTokensCollection();
-    
+    
     const tokenDoc = await tokensCollection.findOne({ token: payload, activated: false });
-    
+    
     if (tokenDoc) {
       // Token is valid and not yet activated
       const credit = tokenDoc.credit_amount;
-      
+      
       // Award credit and update token status
       await usersCollection.updateOne({ _id: userId }, { $inc: { balance: credit } }, { upsert: true });
       await tokensCollection.updateOne({ token: payload }, { $set: { activated: true, activated_by: userId, activated_at: new Date() } });
-      
+      
       return ctx.reply(`✅ *YOUR TOKEN ACTIVATED\\!* 🥳\n\nYou have successfully received *${credit} TK* credit\\. Check your new balance with /balance\\.`, { parse_mode: 'MarkdownV2' }); // ✅ Translated
     } else if (await tokensCollection.findOne({ token: payload })) {
       // Token already used
@@ -320,51 +320,55 @@ bot.action('try_num', (ctx) => {
 
 // ---------------- ACTION HANDLER for 'GET FREE 5 SEARCHES' ----------------
 bot.action('generate_free_link', async (ctx) => {
-    await ctx.answerCbQuery('Generating your free link...');
-    const userId = ctx.from.id;
+    await ctx.answerCbQuery('Generating your free link...');
+    const userId = ctx.from.id;
 
-    // AroLinks API configuration (already defined in CONFIG block)
-    const BOT_USERNAME = ctx.botInfo.username; 
-    
-    // 1. Token Generation 
-    const token = crypto.randomBytes(16).toString('hex');
-    const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour expiry
-    
-    try {
-        const tokensCollection = await getTokensCollection();
-        // Save token to DB
-        await tokensCollection.insertOne({
-            token: token,
-            user_id: userId,
-            credit_amount: FREE_CREDIT_AMOUNT,
-            activated: false,
-            created_at: new Date(),
-            expiry: expiry 
-        });
+    // AroLinks API configuration (already defined in CONFIG block)
+    const BOT_USERNAME = ctx.botInfo.username; 
+    
+    // 1. Token Generation 
+    const token = crypto.randomBytes(16).toString('hex');
+    const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour expiry
+    
+    try {
+        const tokensCollection = await getTokensCollection();
+        // Save token to DB
+        await tokensCollection.insertOne({
+            token: token,
+            user_id: userId,
+            credit_amount: FREE_CREDIT_AMOUNT,
+            activated: false,
+            created_at: new Date(),
+            expiry: expiry 
+        });
 
-        // 2. Create the Telegram Deep Link
-        // https://t.me/YourBotUsername?start=TOKEN
-        const destinationUrl = `https://t.me/${BOT_USERNAME}?start=${token}`;
-        const longUrlEncoded = encodeURIComponent(destinationUrl); 
+        // 2. Create the Telegram Deep Link (Final Destination URL)
+        // https://t.me/YourBotUsername?start=TOKEN
+        const destinationUrl = `https://t.me/${BOT_USERNAME}?start=${token}`;
+        const longUrlEncoded = encodeURIComponent(destinationUrl); 
 
-        // 3. AroLinks API Call
-        const apiUrl = `https://arolinks.com/api?api=${AROLINKS_API_TOKEN}&url=${longUrlEncoded}&format=text`;
+        // ✅ MODIFIED: Create a unique alias (required by your specified API format)
+        const uniqueAlias = `infota${userId}${token.slice(0, 6)}`; 
 
-        const response = await axios.get(apiUrl, { timeout: 15000 });
-        const shortLink = response.data.trim(); // AroLinks returns plain text
-        
-        if (shortLink && shortLink.startsWith('http')) {
-             const message = `🎉 *CONGRATULATIONS\\!* 🎉\n\nClick on the link below to *activate your ${FREE_CREDIT_AMOUNT} Free Searches*\\.\n\n🔗 ${escapeMdV2(shortLink)}\n\n_Note: This link is valid for 1 hour only\\._`;
-             await ctx.reply(message, { parse_mode: 'MarkdownV2', disable_web_page_preview: false });
-        } else {
-             await ctx.reply('❌ *Link Generation Failed\\!* Please try again later or contact support\\.', { parse_mode: 'MarkdownV2' });
-             console.error('AroLinks API failed during free link generation:', response.data);
-        }
+        // 3. AroLinks API Call with the CORRECTED structure and alias
+        // Structure: https://arolinks.com/api?api=...&url=...&alias=...&format=text
+        const apiUrl = `https://arolinks.com/api?api=${AROLINKS_API_TOKEN}&url=${longUrlEncoded}&alias=${uniqueAlias}&format=text`;
 
-    } catch (error) {
-        console.error('Error in generate_free_link action:', error.message);
-        await ctx.reply('❌ An internal error occurred while generating the link\\. Please contact support\\.', { parse_mode: 'MarkdownV2' });
-    }
+        const response = await axios.get(apiUrl, { timeout: 15000 });
+        const shortLink = response.data.trim(); // AroLinks returns plain text
+        
+        if (shortLink && shortLink.startsWith('http')) {
+             const message = `🎉 *CONGRATULATIONS\\!* 🎉\n\nClick on the link below to *activate your ${FREE_CREDIT_AMOUNT} Free Searches*\\.\n\n🔗 ${escapeMdV2(shortLink)}\n\n_Note: This link is valid for 1 hour only\\._`;
+             await ctx.reply(message, { parse_mode: 'MarkdownV2', disable_web_page_preview: false });
+        } else {
+             await ctx.reply('❌ *Link Generation Failed\\!* Please try again later or contact support\\.', { parse_mode: 'MarkdownV2' });
+             console.error('AroLinks API failed during free link generation:', response.data);
+        }
+
+    } catch (error) {
+        console.error('Error in generate_free_link action:', error.message);
+        await ctx.reply('❌ An internal error occurred while generating the link\\. Please contact support\\.', { parse_mode: 'MarkdownV2' });
+    }
 });
 // ---------------- END FREE LINK HANDLER ----------------
 
